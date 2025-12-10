@@ -1,0 +1,364 @@
+// app/(tabs)/deputes/index.tsx
+import { useRouter } from "expo-router";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  FlatList,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
+} from "react-native";
+import {
+  ErrorView,
+  LoadingView,
+  ScreenContainer,
+} from "../../../lib/parlement-common";
+import { supabase } from "../../../lib/supabaseClient";
+import { theme } from "../../../lib/theme";
+import { Depute } from "../../../lib/types";
+
+// Normalisation pour recherche intelligente (sans accents)
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "");
+}
+
+// Couleurs par famille de groupes politiques
+function getGroupColors(groupeAbrev?: string | null, groupe?: string | null) {
+  const raw = (groupeAbrev || groupe || "").toUpperCase();
+
+  if (!raw) {
+    return {
+      fg: theme.colors.text,
+      bg: theme.colors.chipBackground ?? theme.colors.card,
+    };
+  }
+
+  if (raw.includes("RE")) return { fg: "#856100", bg: "#FFF4CC" };
+  if (raw.includes("LFI")) return { fg: "#5a189a", bg: "#f3d9fa" };
+  if (raw.includes("RN")) return { fg: "#00296b", bg: "#dbe4ff" };
+  if (raw.includes("LR")) return { fg: "#00509d", bg: "#e7f1ff" };
+  if (raw.includes("SOC") || raw.includes("PS")) return { fg: "#b00020", bg: "#ffe3e3" };
+  if (raw.includes("ECOLO") || raw.includes("EELV") || raw.includes("VERT"))
+    return { fg: "#166534", bg: "#dcfce7" };
+  if (raw.includes("GDR") || raw.includes("PCF")) return { fg: "#a4133c", bg: "#ffd6e0" };
+  if (raw.includes("LIOT")) return { fg: "#4b5563", bg: "#e5e7eb" };
+  if (raw.includes("HOR")) return { fg: "#0369a1", bg: "#e0f2fe" };
+
+  return {
+    fg: theme.colors.text,
+    bg: theme.colors.chipBackground ?? theme.colors.card,
+  };
+}
+
+export default function DeputesScreen() {
+  const router = useRouter();
+
+  const [deputes, setDeputes] = useState<Depute[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    const fetchDeputes = async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("deputes_officiels")
+        .select(
+          [
+            "row_id",
+            "id_an",
+            "id",
+            "nomcomplet",
+            "nomComplet",
+            "prenom",
+            "nom",
+            "groupe",
+            "groupeAbrev",
+            "departementNom",
+            "departementCode",
+            "circo",
+            "circonscription",
+            "photoUrl",
+            "photourl",
+          ].join(",")
+        )
+        .order("nomcomplet", { ascending: true });
+
+      if (error) {
+        console.log("Erreur chargement députés :", error);
+        setError(error.message);
+        setLoading(false);
+        return;
+      }
+
+      const rows = (data || []) as unknown as Depute[];
+
+      const cleaned = rows.filter((d) => {
+        const name = (d.nomcomplet || d.nomComplet || "").trim().toUpperCase();
+
+        const invalid = ["PARTI SOCIALISTE", "RENAISSANCE", "LES ÉCOLOGISTES"].includes(
+          name
+        );
+        const hasDept = d.circo != null && !!d.departementCode;
+        const hasName =
+          !!d.nomcomplet || !!d.nomComplet || !!d.nom || !!d.prenom;
+
+        return !invalid && hasDept && hasName;
+      });
+
+      setDeputes(cleaned);
+      setLoading(false);
+    };
+
+    fetchDeputes();
+  }, []);
+
+  const filteredDeputes = useMemo(() => {
+    if (!search.trim()) return deputes;
+
+    const query = normalizeText(search);
+    const tokens = query.split(/\s+/).filter(Boolean);
+
+    return deputes.filter((d) => {
+      const haystack = normalizeText(
+        [
+          d.nomcomplet,
+          d.nomComplet,
+          d.prenom,
+          d.nom,
+          d.groupeAbrev,
+          d.groupe,
+          d.departementNom,
+          d.departementCode,
+          d.circo ? `circo ${d.circo}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+
+      return tokens.every((t) => haystack.includes(t));
+    });
+  }, [deputes, search]);
+
+  const handlePressDepute = (depute: Depute) => {
+    router.push({
+      pathname: "/deputes/[id]",
+      params: { id: depute.id_an ?? depute.id ?? String(depute.row_id) },
+    });
+  };
+
+  const handleReset = () => setSearch("");
+
+  const renderItem = ({ item }: { item: Depute }) => {
+    const photo = (item as any).photoUrl || item.photourl || null;
+
+    const groupLabel =
+      item.groupeAbrev && item.groupe
+        ? `${item.groupeAbrev} — ${item.groupe}`
+        : item.groupeAbrev || item.groupe || "Sans groupe";
+
+    const groupColors = getGroupColors(item.groupeAbrev, item.groupe);
+
+    return (
+      <Pressable style={styles.item} onPress={() => handlePressDepute(item)}>
+        {photo ? (
+          <Image source={{ uri: photo }} style={styles.avatar} />
+        ) : (
+          <View style={[styles.avatar, styles.avatarFallback]}>
+            <Text style={styles.avatarFallbackText}>
+              {item.prenom?.[0]}
+              {item.nom?.[0]}
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.itemContent}>
+          <Text style={styles.itemName}>
+            {item.nomcomplet || item.nomComplet}
+          </Text>
+
+          <View style={styles.groupRow}>
+            <View style={[styles.groupChip, { backgroundColor: groupColors.bg }]}>
+              <Text
+                style={[styles.groupChipText, { color: groupColors.fg }]}
+                numberOfLines={1}
+              >
+                {groupLabel}
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.itemDetails} numberOfLines={1}>
+            {item.departementNom} ({item.departementCode}) • Circo{" "}
+            {item.circo ?? "?"}
+          </Text>
+        </View>
+      </Pressable>
+    );
+  };
+
+  if (loading) {
+    return <LoadingView message="Chargement des députés…" />;
+  }
+
+  if (error) {
+    return <ErrorView message={error} />;
+  }
+
+  return (
+    <ScreenContainer
+      title="Députés"
+      subtitle="Recherchez par nom, groupe, département…"
+    >
+      {/* Barre de recherche */}
+      <View style={styles.searchContainer}>
+        <TextInput
+          placeholder="Rechercher un député"
+          placeholderTextColor="#888"
+          value={search}
+          onChangeText={setSearch}
+          style={styles.searchInput}
+          autoCorrect={false}
+          autoCapitalize="words"
+          returnKeyType="search"
+        />
+      </View>
+
+      {/* Liste ou état vide */}
+      {filteredDeputes.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>Aucun député trouvé</Text>
+          <Text style={styles.emptyText}>
+            Vérifiez l’orthographe ou réinitialisez la recherche.
+          </Text>
+
+          <Pressable style={styles.resetButton} onPress={handleReset}>
+            <Text style={styles.resetButtonText}>Réinitialiser</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <FlatList
+          style={styles.list}
+          data={filteredDeputes}
+          keyExtractor={(item) =>
+            item.id_an ?? item.id ?? String(item.row_id)
+          }
+          renderItem={renderItem}
+          contentContainerStyle={styles.listContent}
+          keyboardShouldPersistTaps="handled"
+        />
+      )}
+    </ScreenContainer>
+  );
+}
+
+const styles = StyleSheet.create({
+  searchContainer: {
+    paddingHorizontal: 0,
+    paddingVertical: 8,
+  },
+  searchInput: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    fontSize: 15,
+    backgroundColor: "#fff",
+  },
+  list: {
+    flex: 1,
+  },
+  listContent: {
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  item: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginVertical: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.card,
+  },
+  avatar: {
+    width: 48,
+    height: 64,
+    borderRadius: 8,
+    marginRight: 12,
+    backgroundColor: "#ddd",
+  },
+  avatarFallback: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarFallbackText: {
+    fontWeight: "700",
+    color: "#555",
+  },
+  itemContent: {
+    flex: 1,
+  },
+  itemName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: theme.colors.text,
+  },
+  groupRow: {
+    marginTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  groupChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  groupChipText: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  itemDetails: {
+    marginTop: 4,
+    fontSize: 12,
+    color: theme.colors.subtext,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: theme.colors.text,
+    marginBottom: 4,
+    textAlign: "center",
+  },
+  emptyText: {
+    fontSize: 13,
+    color: theme.colors.subtext,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  resetButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: theme.colors.primary,
+  },
+  resetButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+});

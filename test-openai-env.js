@@ -1,0 +1,9 @@
+require("dotenv").config();
+
+console.log("SUPABASE_URL =", process.env.SUPABASE_URL);
+console.log("SUPABASE_SERVICE_ROLE_KEY =", process.env.SUPABASE_SERVICE_ROLE_KEY ? "[OK]" : "[MISSING]");
+console.log("OPENAI_API_KEY =", process.env.OPENAI_API_KEY);
+
+require("dotenv").config();
+
+console.log("OPENAI_API_KEY =", process.env.OPENAI_API_KEY);

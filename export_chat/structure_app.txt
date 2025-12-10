@@ -1,0 +1,23 @@
+Structure du dossier pour le volume SYSTEM
+Le num‚ro de s‚rie du volume est 000000B4 D495:4128
+C:\USERS\DAMIE\ACTU-PARLEMENT\APP
+³   modal.tsx
+³   _layout.tsx
+³   
+ÀÄÄÄ(tabs)
+    ³   index.tsx
+    ³   index.tsx.bak
+    ³   stats.tsx
+    ³   _layout.tsx
+    ³   
+    ÃÄÄÄdeputes
+    ³       index.tsx
+    ³       index.tsx.bak
+    ³       [id].tsx
+    ³       _layout.tsx
+    ³       
+    ÀÄÄÄlois
+            index.tsx
+            [id].tsx
+            _layout.tsx
+            

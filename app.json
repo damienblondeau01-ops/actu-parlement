@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "actu-parlement",
+    "slug": "actu-parlement",
+    "version": "1.0.0",
+  
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "actudeslois", // 👈 ajout important
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": ["**/*"]
+  }
+}

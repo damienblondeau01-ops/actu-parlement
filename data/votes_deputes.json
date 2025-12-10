@@ -1,0 +1,29 @@
+[
+  {
+    "numero_scrutin": "179",
+    "id_depute": "TEST1",
+    "nom_depute": "Jean Dupont",
+    "groupe": "Renaissance",
+    "groupe_abrev": "RE",
+    "vote": "Pour",
+    "legislature": "17"
+  },
+  {
+    "numero_scrutin": "179",
+    "id_depute": "TEST2",
+    "nom_depute": "Marie Durand",
+    "groupe": "Rassemblement National",
+    "groupe_abrev": "RN",
+    "vote": "Contre",
+    "legislature": "17"
+  },
+  {
+    "numero_scrutin": "179",
+    "id_depute": "TEST3",
+    "nom_depute": "Paul Martin",
+    "groupe": "La France insoumise",
+    "groupe_abrev": "LFI",
+    "vote": "Abstention",
+    "legislature": "17"
+  }
+]

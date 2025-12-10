@@ -1,0 +1,16 @@
+{
+  "name": "actu-parlement-ingestion",
+  "version": "1.0.0",
+  "main": "ingest_all.js",
+  "scripts": {
+    "ingest:deputes": "node ingest_deputes.js",
+    "ingest:lois": "node ingest_lois.js",
+    "ingest:all": "node ingest_all.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.48.0",
+    "csv-parse": "^6.1.0",
+    "dotenv": "^16.4.0",
+    "node-fetch": "^2.7.0"
+  }
+}
