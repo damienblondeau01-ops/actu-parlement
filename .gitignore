@@ -55,3 +55,11 @@ ingestion/scrutins/data/
 *.txt
 ingestion/*run*.txt
 ingestion/ingest_*.txt
+
+# autres variantes d'env
+*.env
+*.env.*
+.env.ingestion
+
+# env dans export_chat
+export_chat/**/.env
