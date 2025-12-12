@@ -1,5 +1,3 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
 # dependencies
 node_modules/
 
@@ -30,14 +28,30 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
-
-# typescript
+# TypeScript
 *.tsbuildinfo
-
-app-example
 
 # generated native folders
 /ios
 /android
+
+# =========================
+# Env (sécurité)
+# =========================
+.env
+.env.*
+
+# =========================
+# ActuDesLois – data & logs
+# =========================
+
+# OpenData AN (ZIP téléchargés automatiquement)
+ingestion/**/*.zip
+ingestion/data/
+ingestion/scrutins/data/
+
+# logs / runs
+*.log
+*.txt
+ingestion/*run*.txt
+ingestion/ingest_*.txt

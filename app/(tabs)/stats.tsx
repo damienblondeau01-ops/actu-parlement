@@ -1,10 +1,8 @@
 // app/(tabs)/stats.tsx
-import { useRouter } from "expo-router";
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Image,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,773 +11,601 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabaseClient";
 import { theme } from "../../lib/theme";
+import { Image as ExpoImage } from "expo-image";
 
 const colors = theme.colors;
 
-type LoiAppRow = {
-  loi_id: string;
-  titre_loi: string | null;
-  nb_scrutins_total: number | null;
-  nb_articles: number | null;
-  nb_amendements: number | null;
-  date_dernier_scrutin: string | null;
-};
-
-type LoiStatsItem = {
-  loi_id: string;
-  titre_loi: string;
-  nb_scrutins_total: number;
-  nb_articles: number;
-  nb_amendements: number;
-  date_dernier_scrutin: string | null;
-};
-
 type DeputeRow = {
-  id_an: string;
+  id_an: string | null;
   nomComplet: string | null;
-  nomcomplet: string | null; // fallback
+  nomcomplet: string | null;
+  prenom: string | null;
+  nom: string | null;
+  groupe: string | null;
   groupeAbrev: string | null;
-  scoreParticipation: number | null;
-  scoreLoyaute: number | null;
-  scoreMajorite: number | null;
+  scoreParticipation: number | string | null;
+  scoreparticipation: number | string | null;
+  scoreLoyaute: number | string | null;
+  scoreloyaute: number | string | null;
   photoUrl: string | null;
-  photourl: string | null; // fallback
+  photourl: string | null;
 };
 
-type DeputeStatsItem = {
-  id_an: string;
-  nom: string;
-  groupe: string | null;
+type DeputeWithScores = {
+  row: DeputeRow;
   participation: number | null;
   loyaute: number | null;
-  majorite: number | null;
-  photo: string | null;
 };
 
-export default function StatsScreen() {
-  const router = useRouter();
+function computeSafeNumber(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return value;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
 
-  const [lois, setLois] = useState<LoiStatsItem[]>([]);
-  const [deputes, setDeputes] = useState<DeputeStatsItem[]>([]);
+function formatPct(value: number | null): string {
+  if (value === null || value === undefined) return "—";
+  return `${value.toFixed(1)} %`;
+}
+
+function getDisplayName(row: DeputeRow): string {
+  return (
+    row.nomComplet ||
+    row.nomcomplet ||
+    `${row.prenom ?? ""} ${row.nom ?? ""}`.trim() ||
+    "Nom non renseigné"
+  );
+}
+
+function getPhotoUrl(row: DeputeRow): string | null {
+  return row.photoUrl || row.photourl || null;
+}
+
+function getGroupLabel(row: DeputeRow): string {
+  if (row.groupe && row.groupeAbrev) {
+    return `${row.groupe} (${row.groupeAbrev})`;
+  }
+  if (row.groupe) return row.groupe;
+  if (row.groupeAbrev) return row.groupeAbrev;
+  return "Groupe non renseigné";
+}
+
+/* 🔹 Ligne d’un député dans un classement */
+function DeputeRankRow(props: {
+  rank: number;
+  depute: DeputeWithScores;
+  mode: "participation" | "loyaute" | "fronde";
+}) {
+  const { rank, depute, mode } = props;
+  const row = depute.row;
+  const name = getDisplayName(row);
+  const photoUrl = getPhotoUrl(row);
+  const groupLabel = getGroupLabel(row);
+
+  let scoreValue: number | null = null;
+  let scoreLabel = "";
+
+  if (mode === "participation") {
+    scoreValue = depute.participation;
+    scoreLabel = "Participation";
+  } else if (mode === "loyaute") {
+    scoreValue = depute.loyaute;
+    scoreLabel = "Loyauté";
+  } else {
+    // frondeur → on affiche la loyauté (basse) mais le label “Loyauté”
+    scoreValue = depute.loyaute;
+    scoreLabel = "Loyauté";
+  }
+
+  const initials = useMemo(() => {
+    const parts = name.split(" ").filter(Boolean);
+    if (parts.length >= 2) {
+      return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  }, [name]);
+
+  return (
+    <View style={styles.rankRow}>
+      <View style={styles.rankLeft}>
+        <Text style={styles.rankNumber}>{rank}</Text>
+        {photoUrl ? (
+          <ExpoImage
+            source={{ uri: photoUrl }}
+            style={styles.rankAvatar}
+            contentFit="cover"
+          />
+        ) : (
+          <View style={styles.rankAvatarFallback}>
+            <Text style={styles.rankAvatarInitials}>{initials}</Text>
+          </View>
+        )}
+        <View style={styles.rankTextCol}>
+          <Text style={styles.rankName} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={styles.rankGroup} numberOfLines={1}>
+            {groupLabel}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.rankRight}>
+        <Text style={styles.rankScoreValue}>{formatPct(scoreValue)}</Text>
+        <Text style={styles.rankScoreLabel}>{scoreLabel}</Text>
+      </View>
+    </View>
+  );
+}
+
+export default function StatsScreen() {
   const [loading, setLoading] = useState(true);
+  const [loadingRanks, setLoadingRanks] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [totalScrutins, setTotalScrutins] = useState<number | null>(null);
+  const [totalVotes, setTotalVotes] = useState<number | null>(null);
+  const [totalDeputes, setTotalDeputes] = useState<number | null>(null);
+
+  const [topParticipation, setTopParticipation] = useState<DeputeWithScores[]>(
+    []
+  );
+  const [topLoyaute, setTopLoyaute] = useState<DeputeWithScores[]>([]);
+  const [topFrondeurs, setTopFrondeurs] = useState<DeputeWithScores[]>([]);
+
   useEffect(() => {
-    const load = async () => {
+    const loadCounts = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const [loisRes, deputesRes] = await Promise.all([
-          supabase
-            .from("lois_app")
-            .select(
-              `
-              loi_id,
-              titre_loi,
-              nb_scrutins_total,
-              nb_articles,
-              nb_amendements,
-              date_dernier_scrutin
-            `
-            ),
-          supabase
-            .from("deputes_officiels")
-            .select(
-              `
-              id_an,
-              nomComplet,
-              nomcomplet,
-              groupeAbrev,
-              scoreParticipation,
-              scoreLoyaute,
-              scoreMajorite,
-              photoUrl,
-              photourl
-            `
-            ),
-        ]);
+        // Scrutins (scrutins_data)
+        const { count: scrCount, error: scrError } = await supabase
+          .from("scrutins_data")
+          .select("*", { count: "exact", head: true });
 
-        if (loisRes.error) {
-          console.warn("[STATS LOIS] Erreur chargement lois_app :", loisRes.error);
-          setError("Impossible de charger les statistiques sur les lois.");
+        if (scrError) {
+          console.warn("[STATS] Erreur count scrutins_data", scrError);
+        } else {
+          setTotalScrutins(scrCount ?? null);
         }
 
-        if (deputesRes.error) {
-          console.warn(
-            "[STATS DEPUTES] Erreur chargement deputes_officiels :",
-            deputesRes.error
-          );
-          setError((prev) =>
-            prev
-              ? prev + " Certaines statistiques sur les députés sont indisponibles."
-              : "Impossible de charger les statistiques sur les députés."
-          );
+        // Votes nominatifs (vue votes_deputes_detail)
+        const { count: votesCount, error: votesError } = await supabase
+          .from("votes_deputes_detail")
+          .select("*", { count: "exact", head: true });
+
+        if (votesError) {
+          console.warn("[STATS] Erreur count votes_deputes_detail", votesError);
+        } else {
+          setTotalVotes(votesCount ?? null);
         }
 
-        const loisRows = (loisRes.data || []) as LoiAppRow[];
-        const mappedLois: LoiStatsItem[] = loisRows.map((row) => ({
-          loi_id: row.loi_id,
-          titre_loi: row.titre_loi || `Loi ${row.loi_id}`,
-          nb_scrutins_total: Number(row.nb_scrutins_total || 0),
-          nb_articles: Number(row.nb_articles || 0),
-          nb_amendements: Number(row.nb_amendements || 0),
-          date_dernier_scrutin: row.date_dernier_scrutin,
-        }));
+        // Députés (deputes_officiels)
+        const { count: depCount, error: depError } = await supabase
+          .from("deputes_officiels")
+          .select("*", { count: "exact", head: true });
 
-        const deputesRows = (deputesRes.data || []) as DeputeRow[];
-        const mappedDeputes: DeputeStatsItem[] = deputesRows.map((row) => ({
-          id_an: row.id_an,
-          nom: row.nomComplet || row.nomcomplet || "Député inconnu",
-          groupe: row.groupeAbrev || null,
-          participation: row.scoreParticipation,
-          loyaute: row.scoreLoyaute,
-          majorite: row.scoreMajorite,
-          photo: row.photoUrl || row.photourl || null,
-        }));
-
-        setLois(mappedLois);
-        setDeputes(mappedDeputes);
-      } catch (e: any) {
-        console.warn("[STATS] Erreur inattendue :", e);
-        setError("Erreur inattendue lors du chargement des statistiques.");
-        setLois([]);
-        setDeputes([]);
+        if (depError) {
+          console.warn("[STATS] Erreur count deputes_officiels", depError);
+        } else {
+          setTotalDeputes(depCount ?? null);
+        }
+      } catch (e) {
+        console.warn("[STATS] Erreur globale counts", e);
+        setError("Impossible de charger les statistiques globales.");
       } finally {
         setLoading(false);
       }
     };
 
-    load();
+    const loadRanks = async () => {
+      try {
+        setLoadingRanks(true);
+
+        const { data, error } = await supabase
+          .from("deputes_officiels")
+          .select(
+            `
+            id_an,
+            nomComplet,
+            nomcomplet,
+            prenom,
+            nom,
+            groupe,
+            groupeAbrev,
+            scoreParticipation,
+            scoreparticipation,
+            scoreLoyaute,
+            scoreloyaute,
+            photoUrl,
+            photourl
+          `
+          );
+
+        if (error) {
+          console.warn("[STATS] Erreur chargement deputes_officiels", error);
+          return;
+        }
+
+        const rows = (data ?? []) as DeputeRow[];
+
+        const withScores: DeputeWithScores[] = rows
+          .map((row) => {
+            const participationRaw =
+              row.scoreParticipation ?? row.scoreparticipation ?? null;
+            const loyauteRaw =
+              row.scoreLoyaute ?? row.scoreloyaute ?? null;
+
+            return {
+              row,
+              participation: computeSafeNumber(participationRaw),
+              loyaute: computeSafeNumber(loyauteRaw),
+            };
+          })
+          .filter((d) => d.row.id_an); // on garde que les lignes avec un id_an
+
+        // Top participation (desc)
+        const topPart = [...withScores]
+          .filter((d) => d.participation !== null)
+          .sort((a, b) => (b.participation! - a.participation!))
+          .slice(0, 5);
+
+        // Top loyauté (desc)
+        const topLoy = [...withScores]
+          .filter((d) => d.loyaute !== null)
+          .sort((a, b) => (b.loyaute! - a.loyaute!))
+          .slice(0, 5);
+
+        // Top frondeurs : loyauté la plus basse, avec un minimum de participation
+        const topFr = [...withScores]
+          .filter(
+            (d) =>
+              d.loyaute !== null &&
+              d.participation !== null &&
+              d.participation >= 40 // un minimum d'activité
+          )
+          .sort((a, b) => (a.loyaute! - b.loyaute!))
+          .slice(0, 5);
+
+        setTopParticipation(topPart);
+        setTopLoyaute(topLoy);
+        setTopFrondeurs(topFr);
+      } catch (e) {
+        console.warn("[STATS] Erreur globale ranks", e);
+      } finally {
+        setLoadingRanks(false);
+      }
+    };
+
+    loadCounts();
+    loadRanks();
   }, []);
 
-  // --- Stats LOIS ---
-  const {
-    totalLois,
-    totalScrutins,
-    totalArticles,
-    totalAmendements,
-    avgScrutinsParLoi,
-    avgAmendementsParLoi,
-    topLoisScrutins,
-    topLoisAmendements,
-    topLoisRecentes,
-  } = useMemo(() => {
-    if (lois.length === 0) {
-      return {
-        totalLois: 0,
-        totalScrutins: 0,
-        totalArticles: 0,
-        totalAmendements: 0,
-        avgScrutinsParLoi: 0,
-        avgAmendementsParLoi: 0,
-        topLoisScrutins: [] as LoiStatsItem[],
-        topLoisAmendements: [] as LoiStatsItem[],
-        topLoisRecentes: [] as LoiStatsItem[],
-      };
-    }
-
-    const totalLois = lois.length;
-    const totalScrutins = lois.reduce(
-      (sum, loi) => sum + (loi.nb_scrutins_total || 0),
-      0
-    );
-    const totalArticles = lois.reduce(
-      (sum, loi) => sum + (loi.nb_articles || 0),
-      0
-    );
-    const totalAmendements = lois.reduce(
-      (sum, loi) => sum + (loi.nb_amendements || 0),
-      0
-    );
-
-    const avgScrutinsParLoi =
-      totalLois > 0 ? Math.round((totalScrutins / totalLois) * 10) / 10 : 0;
-    const avgAmendementsParLoi =
-      totalLois > 0 ? Math.round((totalAmendements / totalLois) * 10) / 10 : 0;
-
-    const topLoisScrutins = [...lois]
-      .sort((a, b) => b.nb_scrutins_total - a.nb_scrutins_total)
-      .slice(0, 5);
-
-    const topLoisAmendements = [...lois]
-      .sort((a, b) => b.nb_amendements - a.nb_amendements)
-      .slice(0, 5);
-
-    const topLoisRecentes = [...lois]
-      .sort((a, b) => {
-        const da = a.date_dernier_scrutin
-          ? new Date(a.date_dernier_scrutin).getTime()
-          : 0;
-        const db = b.date_dernier_scrutin
-          ? new Date(b.date_dernier_scrutin).getTime()
-          : 0;
-        return db - da;
-      })
-      .slice(0, 5);
-
-    return {
-      totalLois,
-      totalScrutins,
-      totalArticles,
-      totalAmendements,
-      avgScrutinsParLoi,
-      avgAmendementsParLoi,
-      topLoisScrutins,
-      topLoisAmendements,
-      topLoisRecentes,
-    };
-  }, [lois]);
-
-  // --- Stats DEPUTES ---
-  const {
-    topParticipation,
-    topLoyaute,
-    topProMajorite,
-    countParticipation,
-    countLoyaute,
-    countMajorite,
-  } = useMemo(() => {
-    if (deputes.length === 0) {
-      return {
-        topParticipation: [] as DeputeStatsItem[],
-        topLoyaute: [] as DeputeStatsItem[],
-        topProMajorite: [] as DeputeStatsItem[],
-        countParticipation: 0,
-        countLoyaute: 0,
-        countMajorite: 0,
-      };
-    }
-
-    const withParticipation = deputes.filter(
-      (d) => d.participation != null
-    );
-    const withLoyaute = deputes.filter((d) => d.loyaute != null);
-    const withMajorite = deputes.filter((d) => d.majorite != null);
-
-    const topParticipation = [...withParticipation]
-      .sort((a, b) => (b.participation ?? 0) - (a.participation ?? 0))
-      .slice(0, 5);
-
-    const topLoyaute = [...withLoyaute]
-      .sort((a, b) => (b.loyaute ?? 0) - (a.loyaute ?? 0))
-      .slice(0, 5);
-
-    const topProMajorite = [...withMajorite]
-      .sort((a, b) => (b.majorite ?? 0) - (a.majorite ?? 0))
-      .slice(0, 5);
-
-    return {
-      topParticipation,
-      topLoyaute,
-      topProMajorite,
-      countParticipation: withParticipation.length,
-      countLoyaute: withLoyaute.length,
-      countMajorite: withMajorite.length,
-    };
-  }, [deputes]);
-
-  const renderLoiRow = (loi: LoiStatsItem) => {
-    const dateLabel = loi.date_dernier_scrutin
-      ? new Date(loi.date_dernier_scrutin).toLocaleDateString("fr-FR")
-      : "—";
-
+  if (loading && !error) {
     return (
-      <Pressable
-        key={loi.loi_id}
-        style={styles.loiRow}
-        onPress={() => router.push(`/lois/${loi.loi_id}`)}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={styles.loiTitre} numberOfLines={2}>
-            {loi.titre_loi}
-          </Text>
-          <Text style={styles.loiMeta}>Dernier scrutin : {dateLabel}</Text>
-        </View>
-        <View style={styles.loiChipsCol}>
-          <View style={styles.loiChip}>
-            <Text style={styles.loiChipText}>
-              {loi.nb_scrutins_total} scrutin(s)
-            </Text>
-          </View>
-          <View style={styles.loiChip}>
-            <Text style={styles.loiChipText}>
-              {loi.nb_amendements} amendement(s)
-            </Text>
-          </View>
-        </View>
-      </Pressable>
+      <SafeAreaView style={styles.center}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>
+          Chargement des statistiques globales…
+        </Text>
+      </SafeAreaView>
     );
-  };
+  }
 
-  const renderDeputeRow = (
-    d: DeputeStatsItem,
-    mode: "participation" | "loyaute" | "majorite"
-  ) => {
-    const mainScore =
-      mode === "participation"
-        ? d.participation
-        : mode === "loyaute"
-        ? d.loyaute
-        : d.majorite;
-
-    const suffix =
-      mode === "participation"
-        ? "participation"
-        : mode === "loyaute"
-        ? "loyauté"
-        : "votes avec la majorité";
-
-    const scoreNumber = mainScore ?? 0;
-    const clampedScore =
-      scoreNumber < 0 ? 0 : scoreNumber > 100 ? 100 : scoreNumber;
-
+  if (error) {
     return (
-      <Pressable
-        key={d.id_an}
-        style={styles.deputeRow}
-        onPress={() => router.push(`/deputes/${d.id_an}`)}
-      >
-        {/* Avatar + texte */}
-        <View style={styles.deputeLeft}>
-          <View style={styles.deputeAvatar}>
-            {d.photo ? (
-              <Image
-                source={{ uri: d.photo }}
-                style={styles.deputeAvatarImg}
-              />
-            ) : (
-              <View
-                style={[
-                  styles.deputeAvatarFallback,
-                  {
-                    backgroundColor: d.groupe
-                      ? getGroupColor(d.groupe)
-                      : colors.primarySoft,
-                  },
-                ]}
-              >
-                <Text style={styles.deputeAvatarInitials}>
-                  {getInitials(d.nom)}
-                </Text>
-              </View>
-            )}
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={styles.deputeHeaderRow}>
-              {d.groupe && (
-                <View
-                  style={[
-                    styles.groupDot,
-                    { backgroundColor: getGroupColor(d.groupe) },
-                  ]}
-                />
-              )}
-              <Text style={styles.deputeNom} numberOfLines={1}>
-                {d.nom}
-              </Text>
-            </View>
-            <Text style={styles.deputeMeta}>
-              {d.groupe ? d.groupe : "Groupe non renseigné"}
-            </Text>
-          </View>
-        </View>
-
-        {/* Score + barre */}
-        <View style={styles.deputeScoreCol}>
-          <Text style={styles.deputeChipText}>
-            {mainScore != null ? `${mainScore}%` : "—"} {suffix}
-          </Text>
-          <View style={styles.deputeBarTrack}>
-            <View
-              style={[
-                styles.deputeBarFill,
-                { width: `${clampedScore}%` },
-              ]}
-            />
-          </View>
-        </View>
-      </Pressable>
+      <SafeAreaView style={styles.center}>
+        <Text style={styles.errorText}>{error}</Text>
+      </SafeAreaView>
     );
-  };
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Stats</Text>
-        <Text style={styles.headerSubtitle}>
-          Vue d&apos;ensemble des lois et des députés.
-        </Text>
-      </View>
-
-      {loading && (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Analyse des données…</Text>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* HEADER */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Statistiques globales</Text>
+          <Text style={styles.headerSubtitle}>
+            Vue d&apos;ensemble de l&apos;activité parlementaire.
+          </Text>
         </View>
-      )}
 
-      {!loading && error && (
-        <View style={styles.center}>
-          <Text style={styles.errorText}>{error}</Text>
+        {/* CARTES COMPTEURS */}
+        <View style={styles.countersRow}>
+          <View style={styles.counterCard}>
+            <Text style={styles.counterLabel}>Scrutins analysés</Text>
+            <Text style={styles.counterValue}>
+              {totalScrutins !== null ? totalScrutins : "—"}
+            </Text>
+          </View>
+          <View style={styles.counterCard}>
+            <Text style={styles.counterLabel}>Votes nominatifs</Text>
+            <Text style={styles.counterValue}>
+              {totalVotes !== null ? totalVotes.toLocaleString("fr-FR") : "—"}
+            </Text>
+          </View>
         </View>
-      )}
 
-      {!loading && !error && (
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-        >
-          {/* --- Bloc LOIS --- */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Lois — Vue d&apos;ensemble</Text>
-            <View style={styles.grid2}>
-              <View style={styles.kpiBlock}>
-                <Text style={styles.kpiLabel}>Lois suivies</Text>
-                <Text style={styles.kpiValue}>{totalLois}</Text>
-              </View>
-              <View style={styles.kpiBlock}>
-                <Text style={styles.kpiLabel}>Scrutins cumulés</Text>
-                <Text style={styles.kpiValue}>{totalScrutins}</Text>
-              </View>
+        <View style={styles.countersRow}>
+          <View style={[styles.counterCard, { flex: 1 }]}>
+            <Text style={styles.counterLabel}>Députés suivis</Text>
+            <Text style={styles.counterValue}>
+              {totalDeputes !== null ? totalDeputes : "—"}
+            </Text>
+          </View>
+        </View>
+
+        {/* TOP PARTICIPATION */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Top participation</Text>
+          <Text style={styles.sectionSubtitle}>
+            Députés ayant pris part au plus grand nombre de scrutins.
+          </Text>
+
+          {loadingRanks && topParticipation.length === 0 && (
+            <View style={styles.sectionLoadingRow}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={styles.smallGrey}>Chargement des classements…</Text>
             </View>
-            <View style={[styles.grid2, { marginTop: 12 }]}>
-              <View style={styles.kpiBlock}>
-                <Text style={styles.kpiLabel}>Scrutins / loi</Text>
-                <Text style={styles.kpiValue}>{avgScrutinsParLoi}</Text>
-              </View>
-              <View style={styles.kpiBlock}>
-                <Text style={styles.kpiLabel}>Amendements / loi</Text>
-                <Text style={styles.kpiValue}>{avgAmendementsParLoi}</Text>
-              </View>
-            </View>
-          </View>
+          )}
 
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Lois les plus débattues</Text>
-            <Text style={styles.sectionSubtitleSmall}>
-              Top 5 sur {totalLois} lois
+          {topParticipation.length === 0 && !loadingRanks && (
+            <Text style={styles.smallGrey}>
+              Les données de participation ne sont pas encore disponibles.
             </Text>
-            {topLoisScrutins.length === 0 && (
-              <Text style={styles.emptyText}>
-                Pas encore assez de données pour calculer ce classement.
-              </Text>
-            )}
-            {topLoisScrutins.map((loi) => renderLoiRow(loi))}
-          </View>
+          )}
 
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Lois les plus amendées</Text>
-            <Text style={styles.sectionSubtitleSmall}>
-              Top 5 sur {totalLois} lois
+          {topParticipation.map((d, idx) => (
+            <DeputeRankRow
+              key={d.row.id_an ?? `part-${idx}`}
+              rank={idx + 1}
+              depute={d}
+              mode="participation"
+            />
+          ))}
+        </View>
+
+        {/* TOP LOYAUTÉ */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Top loyauté</Text>
+          <Text style={styles.sectionSubtitle}>
+            Députés votant le plus souvent en accord avec leur groupe.
+          </Text>
+
+          {topLoyaute.length === 0 && !loadingRanks && (
+            <Text style={styles.smallGrey}>
+              Les données de loyauté ne sont pas encore disponibles.
             </Text>
-            {topLoisAmendements.length === 0 && (
-              <Text style={styles.emptyText}>
-                Pas encore assez de données pour calculer ce classement.
-              </Text>
-            )}
-            {topLoisAmendements.map((loi) => renderLoiRow(loi))}
-          </View>
+          )}
 
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Lois les plus récentes</Text>
-            <Text style={styles.sectionSubtitleSmall}>
-              Top 5 sur {totalLois} lois
+          {topLoyaute.map((d, idx) => (
+            <DeputeRankRow
+              key={d.row.id_an ?? `loy-${idx}`}
+              rank={idx + 1}
+              depute={d}
+              mode="loyaute"
+            />
+          ))}
+        </View>
+
+        {/* TOP FRONDEURS */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Top frondeurs</Text>
+          <Text style={styles.sectionSubtitle}>
+            Députés les plus souvent en désaccord avec leur groupe, parmi les
+            plus actifs.
+          </Text>
+
+          {topFrondeurs.length === 0 && !loadingRanks && (
+            <Text style={styles.smallGrey}>
+              Aucun profil de frondeur clairement identifié pour l&apos;instant.
             </Text>
-            {topLoisRecentes.length === 0 && (
-              <Text style={styles.emptyText}>
-                Pas encore assez de données pour calculer ce classement.
-              </Text>
-            )}
-            {topLoisRecentes.map((loi) => renderLoiRow(loi))}
-          </View>
+          )}
 
-          {/* --- Bloc DEPUTES --- */}
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Députés les plus actifs</Text>
-            <Text style={styles.sectionSubtitleSmall}>
-              Top 5 sur {countParticipation} députés
-            </Text>
-            {topParticipation.length === 0 && (
-              <Text style={styles.emptyText}>
-                Pas encore assez de données pour calculer ce classement.
-              </Text>
-            )}
-            {topParticipation.map((d) =>
-              renderDeputeRow(d, "participation")
-            )}
-          </View>
+          {topFrondeurs.map((d, idx) => (
+            <DeputeRankRow
+              key={d.row.id_an ?? `fronde-${idx}`}
+              rank={idx + 1}
+              depute={d}
+              mode="fronde"
+            />
+          ))}
+        </View>
 
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Députés les plus loyaux</Text>
-            <Text style={styles.sectionSubtitleSmall}>
-              Top 5 sur {countLoyaute} députés
-            </Text>
-            {topLoyaute.length === 0 && (
-              <Text style={styles.emptyText}>
-                Pas encore assez de données pour calculer ce classement.
-              </Text>
-            )}
-            {topLoyaute.map((d) => renderDeputeRow(d, "loyaute"))}
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Députés les plus pro-majorité</Text>
-            <Text style={styles.sectionSubtitleSmall}>
-              Top 5 sur {countMajorite} députés
-            </Text>
-            {topProMajorite.length === 0 && (
-              <Text style={styles.emptyText}>
-                Pas encore assez de données pour calculer ce classement.
-              </Text>
-            )}
-            {topProMajorite.map((d) => renderDeputeRow(d, "majorite"))}
-          </View>
-
-          <View style={{ height: 40 }} />
-        </ScrollView>
-      )}
+        <View style={styles.footerNoteContainer}>
+          <Text style={styles.footerNote}>
+            Statistiques calculées à partir des données officielles OpenData de
+            l&apos;Assemblée nationale (scrutins & votes nominatifs).
+          </Text>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
-
-/* ---------- Helpers ---------- */
-
-function getGroupColor(groupe: string): string {
-  const g = groupe.toLowerCase();
-
-  if (g.includes("rassemblement national")) return "#22c55e";
-  if (g.includes("la france insoumise")) return "#ef4444";
-  if (g.includes("socialistes")) return "#ec4899";
-  if (g.includes("gauche démocrate")) return "#f97316";
-  if (g.includes("écologiste") || g.includes("ecologiste")) return "#10b981";
-  if (g.includes("horizons")) return "#0ea5e9";
-  if (g.includes("renaissance")) return "#4f46e5";
-  if (g.includes("démocrate") || g.includes("democrate")) return "#22d3ee";
-  if (g.includes("les républicains")) return "#0f766e";
-
-  return colors.primary;
-}
-
-function getInitials(name: string): string {
-  if (!name) return "?";
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-  return (
-    parts[0].charAt(0).toUpperCase() +
-    parts[parts.length - 1].charAt(0).toUpperCase()
-  );
-}
-
-/* ---------- Styles ---------- */
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: colors.background,
   },
-  header: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  headerTitle: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  headerSubtitle: {
-    color: colors.subtext,
-    fontSize: 13,
-    marginTop: 4,
-  },
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 24,
-  },
-  loadingText: {
-    marginTop: 12,
-    color: colors.subtext,
-  },
-  errorText: {
-    color: colors.danger,
-    textAlign: "center",
-    fontSize: 14,
-  },
   scroll: {
     flex: 1,
   },
   scrollContent: {
     paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 40,
+    paddingBottom: 32,
+    paddingTop: 8,
   },
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: theme.radius.lg,
+
+  center: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: "center",
+    justifyContent: "center",
     padding: 16,
-    marginBottom: 16,
+  },
+  loadingText: {
+    marginTop: 8,
+    color: colors.subtext,
+    fontSize: 13,
+  },
+  errorText: {
+    color: colors.danger || "red",
+    textAlign: "center",
+    marginHorizontal: 16,
+  },
+
+  header: {
+    marginBottom: 12,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  headerSubtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: colors.subtext,
+  },
+
+  countersRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+  },
+  counterCard: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: colors.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  counterLabel: {
+    fontSize: 12,
+    color: colors.subtext,
+    marginBottom: 4,
+  },
+  counterValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+  },
+
+  sectionCard: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: colors.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
   sectionTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 4,
-  },
-  sectionSubtitleSmall: {
-    color: colors.subtext,
-    fontSize: 12,
-    marginBottom: 4,
-  },
-
-  /* KPIs lois */
-  grid2: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  kpiBlock: {
-    flex: 1,
-    paddingVertical: 8,
-  },
-  kpiLabel: {
-    color: colors.subtext,
-    fontSize: 12,
-  },
-  kpiValue: {
-    color: colors.text,
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "700",
-    marginTop: 4,
-  },
-
-  emptyText: {
-    color: colors.subtext,
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  /* Lois rows */
-  loiRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-    marginTop: 6,
-  },
-  loiTitre: {
     color: colors.text,
-    fontSize: 14,
-    fontWeight: "500",
   },
-  loiMeta: {
+  sectionSubtitle: {
+    fontSize: 12,
     color: colors.subtext,
-    fontSize: 11,
     marginTop: 2,
-  },
-  loiChipsCol: {
-    marginLeft: 8,
-    alignItems: "flex-end",
-  },
-  loiChip: {
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    backgroundColor: colors.primarySoft,
-    marginBottom: 4,
-  },
-  loiChipText: {
-    color: colors.primary,
-    fontSize: 11,
-    fontWeight: "500",
+    marginBottom: 8,
   },
 
-  /* Députés rows */
-  deputeRow: {
+  sectionLoadingRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
     marginTop: 6,
+    gap: 6,
   },
-  deputeLeft: {
+  smallGrey: {
+    fontSize: 12,
+    color: colors.subtext,
+  },
+
+  rankRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  rankLeft: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
     marginRight: 8,
   },
-  deputeAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    overflow: "hidden",
-    marginRight: 10,
+  rankNumber: {
+    width: 20,
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.subtext,
   },
-  deputeAvatarImg: {
-    width: "100%",
-    height: "100%",
-    borderRadius: 18,
+  rankAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
   },
-  deputeAvatarFallback: {
-    flex: 1,
+  rankAvatarFallback: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+    backgroundColor: colors.surface,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
-  deputeAvatarInitials: {
-    color: "#fff",
+  rankAvatarInitials: {
     fontSize: 13,
-    fontWeight: "700",
-  },
-  deputeHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  groupDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  deputeNom: {
+    fontWeight: "600",
     color: colors.text,
-    fontSize: 14,
-    fontWeight: "500",
   },
-  deputeMeta: {
-    color: colors.subtext,
+  rankTextCol: {
+    flex: 1,
+  },
+  rankName: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  rankGroup: {
     fontSize: 11,
-    marginTop: 2,
+    color: colors.subtext,
+    marginTop: 1,
+  },
+  rankRight: {
+    alignItems: "flex-end",
+  },
+  rankScoreValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  rankScoreLabel: {
+    fontSize: 11,
+    color: colors.subtext,
   },
 
-  deputeScoreCol: {
-    width: 140,
+  footerNoteContainer: {
+    marginTop: 14,
+    alignItems: "center",
+    paddingHorizontal: 12,
   },
-  deputeChipText: {
-    color: colors.text,
+  footerNote: {
     fontSize: 11,
-    fontWeight: "500",
-    textAlign: "right",
-    marginBottom: 4,
-  },
-  deputeBarTrack: {
-    width: "100%",
-    height: 6,
-    borderRadius: 999,
-    backgroundColor: colors.surface,
-    overflow: "hidden",
-  },
-  deputeBarFill: {
-    height: "100%",
-    borderRadius: 999,
-    backgroundColor: colors.primary,
+    color: colors.subtext,
+    textAlign: "center",
   },
 });

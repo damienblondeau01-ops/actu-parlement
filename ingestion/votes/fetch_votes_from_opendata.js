@@ -1,13 +1,32 @@
-// ingestion/fetch_votes_from_opendata.js
+// ingestion/votes/fetch_votes_from_opendata.js
 import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
 import { fileURLToPath } from "url";
-import "dotenv/config";
-import { supabase } from "./supabase_ingest_client.js";
+import dotenv from "dotenv";
+import fetch from "node-fetch"; // ✅ IMPORTANT : import explicite de fetch
+import { createClient } from "@supabase/supabase-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 🔹 Charger ingestion/.env (parent de /votes)
+dotenv.config({ path: path.join(__dirname, "..", ".env") });
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE;
+
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+  console.error(
+    "❌ SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant dans ingestion/.env (fetch_votes_from_opendata)"
+  );
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
 
 // 🎯 Législature passée en argument : 16 (par défaut) ou 17
 const legislatureArg = process.argv[2];
@@ -15,7 +34,7 @@ const LEGISLATURE = legislatureArg || "16";
 
 if (!["16", "17"].includes(LEGISLATURE)) {
   console.error(
-    `❌ Législature invalide "${LEGISLATURE}". Utilise 16 ou 17 (ex: node ingestion/fetch_votes_from_opendata.js 17)`
+    `❌ Législature invalide "${LEGISLATURE}". Utilise 16 ou 17 (ex: node ingestion/votes/fetch_votes_from_opendata.js 17)`
   );
   process.exit(1);
 }
@@ -145,13 +164,17 @@ function extractVotesFromScrutin(scrutin, debug = false) {
           if (voteNode.decompteNominatifParDelegation) {
             console.log(
               "      [DEBUG] Clés voteNode.decompteNominatifParDelegation :",
-              Object.keys(voteNode.decompteNominatifParDelegation || {})
+              Object.keys(
+                voteNode.decompteNominatifParDelegation || {}
+              )
             );
           }
           if (voteNode.decompteNominatifParGroupe) {
             console.log(
               "      [DEBUG] Clés voteNode.decompteNominatifParGroupe :",
-              Object.keys(voteNode.decompteNominatifParGroupe || {})
+              Object.keys(
+                voteNode.decompteNominatifParGroupe || {}
+              )
             );
           }
         } catch (e) {
@@ -249,11 +272,11 @@ function extractVotesFromScrutin(scrutin, debug = false) {
             positionLabel = "Non votant";
 
           votes.push({
-            // 🧱 Champs alignés avec votes_deputes_scrutin / votes_par_scrutin_detail
             legislature: LEGISLATURE,
             numero_scrutin: String(scrutin.numero),
-            scrutin_id: String(scrutin.numero ?? ""),
-            id_depute: actor, // → exposé comme depute_an_id dans la vue
+            // ✅ si uid existe, on le garde comme identifiant "brut"
+            scrutin_id: String(scrutin.uid ?? scrutin.numero ?? ""),
+            id_depute: actor, // → clé avec numero_scrutin
             groupe: groupeLabel,
             groupe_nom: groupeNomComplet,
             groupe_abrev: groupeAbrev,
@@ -331,7 +354,7 @@ function extractVotesFromScrutin(scrutin, debug = false) {
           votes.push({
             legislature: LEGISLATURE,
             numero_scrutin: String(scrutin.numero),
-            scrutin_id: String(scrutin.numero ?? ""),
+            scrutin_id: String(scrutin.uid ?? scrutin.numero ?? ""),
             id_depute: actor,
             groupe: groupeLabel,
             groupe_nom: groupeNomComplet,
@@ -381,7 +404,9 @@ async function main() {
 
   const resp = await fetch(URL);
   if (!resp.ok) {
-    throw new Error(`Échec du téléchargement (${resp.status}) ${resp.statusText}`);
+    throw new Error(
+      `Échec du téléchargement (${resp.status}) ${resp.statusText}`
+    );
   }
 
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -398,10 +423,7 @@ async function main() {
     e.entryName.toLowerCase().endsWith(".json")
   );
 
-  console.log(
-    "   → Fichiers JSON trouvés dans le ZIP :",
-    jsonEntries.length
-  );
+  console.log("   → Fichiers JSON trouvés dans le ZIP :", jsonEntries.length);
 
   if (jsonEntries.length === 0) {
     console.log("⚠ Aucun fichier JSON trouvé dans le ZIP.");
@@ -441,10 +463,7 @@ async function main() {
   }
 
   const first = scrutins[0];
-  console.log(
-    "   • Clés du premier scrutin :",
-    Object.keys(first || {})
-  );
+  console.log("   • Clés du premier scrutin :", Object.keys(first || {}));
   if (first?.ventilationVotes) {
     console.log(
       "   • Clés ventilationVotes :",
@@ -498,10 +517,28 @@ async function main() {
     return;
   }
 
-  // 🔍 Diagnostic : combien de votes ont réellement un id_depute ?
-  const withId = allVotes.filter((v) => v.id_depute).length;
-  console.log("   • Votes avec id_depute renseigné :", withId);
-  console.log("   • Votes SANS id_depute :", allVotes.length - withId);
+  // 🔍 Nettoyage / déduplication avant upsert
+  const dedupMap = new Map();
+  let droppedNoId = 0;
+
+  for (const v of allVotes) {
+    const id = (v.id_depute || "").toString().trim();
+    if (!id) {
+      droppedNoId++;
+      continue; // on ignore les votes sans id_depute
+    }
+    const key = `${v.numero_scrutin}::${id}`;
+    if (!dedupMap.has(key)) {
+      dedupMap.set(key, v);
+    }
+  }
+
+  const votesFinal = Array.from(dedupMap.values());
+  console.log(
+    "   • Votes gardés après nettoyage/déduplication :",
+    votesFinal.length
+  );
+  console.log("   • Votes ignorés car sans id_depute :", droppedNoId);
 
   console.log("💾 Insertion / upsert dans la table votes_deputes_scrutin…");
 
@@ -509,8 +546,8 @@ async function main() {
   let ko = 0;
   const BATCH_SIZE = 500;
 
-  for (let i = 0; i < allVotes.length; i += BATCH_SIZE) {
-    const batch = allVotes.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < votesFinal.length; i += BATCH_SIZE) {
+    const batch = votesFinal.slice(i, i + BATCH_SIZE);
     const { error } = await supabase
       .from("votes_deputes_scrutin")
       .upsert(batch, {
@@ -527,7 +564,7 @@ async function main() {
 
   console.log("🎉 Fin de l’import des votes.");
   console.log(`   ✔ Votes insérés / mis à jour : ${ok}`);
-  console.log(`   ✖ Votes en erreur / ignorés : ${ko}`);
+  console.log(`   ✖ Votes en erreur / ignorés (erreur SQL) : ${ko}`);
 }
 
 main().catch((e) => {

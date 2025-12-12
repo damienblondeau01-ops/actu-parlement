@@ -1,30 +1,38 @@
-// ingestion/ingest_deputes.js - VERSION CSV LOCAL (députés actifs + bio)
+// ingestion/deputes/ingest_deputes.js - VERSION CSV LOCAL (députés actifs + bio)
 
-const path = require("path");
 const fs = require("fs");
-require("dotenv").config({ path: path.resolve(__dirname, "..", ".env") });
-const { createClient } = require("@supabase/supabase-js");
+const path = require("path");
 const { parse } = require("csv-parse/sync");
+const { createClient } = require("@supabase/supabase-js");
+
+// 🔹 Charger ingestion/.env (dossier parent de /deputes)
+require("dotenv").config({
+  path: path.join(__dirname, "..", ".env"),
+});
 
 // --- Vérification ENV ---
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE;
+const SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
-  console.error("SUPABASE_URL ou SUPABASE_SERVICE_ROLE manquant dans .env");
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+  console.error(
+    "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant dans ingestion/.env (ingest_deputes)"
+  );
   process.exit(1);
 }
 
 console.log("URL =", SUPABASE_URL);
-console.log("KEY (début) =", SUPABASE_SERVICE_ROLE.slice(0, 10));
+console.log("KEY (début) =", SERVICE_ROLE_KEY.slice(0, 10));
 
 // Client admin Supabase
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
+const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
 // --- Chemin vers le CSV local ---
-const CSV_PATH = path.resolve(__dirname, "deputes-active.csv");
+// On remonte d'un niveau car le fichier est dans ingestion/deputes-active.csv
+const CSV_PATH = path.join(__dirname, "..", "deputes-active.csv");
 
 // --- Lecture + parsing du CSV ---
 function loadDeputesFromCSV() {
@@ -100,15 +108,9 @@ function mapRecordToDepute(row) {
 
   // ------------------ BIOGRAPHIE ------------------
   const naissance =
-    row.naissance ||
-    row.date_naissance ||
-    row.dateNaissance ||
-    null; // string, ex "1975-06-01"
+    row.naissance || row.date_naissance || row.dateNaissance || null; // string, ex "1975-06-01"
 
-  const villeNaissance =
-    row.villeNaissance ||
-    row.ville_naissance ||
-    null;
+  const villeNaissance = row.villeNaissance || row.ville_naissance || null;
 
   const profession = row.profession || row.job || null;
 
@@ -245,7 +247,9 @@ async function run() {
       `✅ Députés valides après filtre : ${cleanedDeputes.length} | ❌ rejetés : ${rejectedDeputes.length}`
     );
     if (rejectedDeputes.length > 0) {
-      console.log("❌ Détails des députés rejetés (id_an invalide ou bloqué) :");
+      console.log(
+        "❌ Détails des députés rejetés (id_an invalide ou bloqué) :"
+      );
       for (const r of rejectedDeputes) {
         console.log(
           `  - id_an="${r.id_raw}" | nom="${r.nom}" | raison="${r.reason}"`
@@ -272,7 +276,13 @@ async function run() {
     for (let i = 0; i < chunks.length; i++) {
       const batch = chunks[i];
       console.log(
-        "Batch " + (i + 1) + "/" + chunks.length + " – " + batch.length + " lignes"
+        "Batch " +
+          (i + 1) +
+          "/" +
+          chunks.length +
+          " – " +
+          batch.length +
+          " lignes"
       );
 
       const { error } = await supabaseAdmin

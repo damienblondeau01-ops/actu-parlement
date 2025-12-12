@@ -2,17 +2,39 @@ const fs = require("fs");
 const path = require("path");
 const JSZip = require("jszip");
 const { createClient } = require("@supabase/supabase-js");
-require("dotenv").config();
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// 🔹 Charger le .env situé dans ingestion/.env (un niveau au-dessus de ce fichier)
+require("dotenv").config({
+  path: path.join(__dirname, "..", ".env"),
+});
+
+// 🔹 Récupérer les variables Supabase de façon robuste
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE;
+
+if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
+  console.error(
+    "❌ SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant dans ingestion/.env (fetch_dossiers_legislatifs)"
+  );
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+// Petit flag pour ne logguer qu'UNE SEULE FOIS un exemple de dossier
+let hasLoggedExample = false;
 
 async function main() {
   console.log("🚀 Import dossiers législatifs démarré...");
 
-  const zipPath = path.join(__dirname, "data", "dossiers_legislatifs.json.zip");
+  // ⚠️ IMPORTANT : on remonte d'un niveau, car le ZIP est dans ingestion/data
+  const zipPath = path.join(
+    __dirname,
+    "..",
+    "data",
+    "dossiers_legislatifs.json.zip"
+  );
 
   if (!fs.existsSync(zipPath)) {
     console.log("❌ ZIP introuvable :", zipPath);
@@ -56,11 +78,10 @@ async function main() {
 }
 
 async function saveDossier(d) {
-  // On log une fois au début pour vérifier la structure
-  if (d._debug_logged !== true) {
+  // 🔎 On log un exemple de structure une seule fois (et on évite de polluer "raw")
+  if (!hasLoggedExample) {
     console.log("🔎 Exemple de dossierParlementaire (clés) :", Object.keys(d));
-    // On ajoute un flag pour ne pas log à chaque fois
-    d._debug_logged = true;
+    hasLoggedExample = true;
   }
 
   const loi = {
@@ -79,8 +100,9 @@ async function saveDossier(d) {
     url_legifrance: d.urlLegifrance || null,
     etat_courant: d.etat || d.etatDossier || null,
     date_depot: d.dateDepot || null,
-    date_premiere_lecture_an: d.datePremiereLectureAN || null,
-    date_premiere_lecture_senat: d.datePremiereLectureSenat || null,
+    date_premiere_lecture_an: d.datePremiere_lecture_an || d.datePremiereLectureAN || null,
+    date_premiere_lecture_senat:
+      d.datePremiere_lecture_senat || d.datePremiereLectureSenat || null,
     date_adoption_definitive: d.dateAdoption || null,
     date_promulgation: d.datePromulgation || null,
     raw: d,
@@ -103,7 +125,10 @@ async function saveDossier(d) {
   // Pour l’instant, on ne remplit pas encore lois_parcours
   // (il faudra voir la structure précise de d.etapes / d.procedure)
   // On nettoie juste pour éviter de garder de vieilles données incohérentes.
-  await supabase.from("lois_parcours").delete().eq("id_dossier", loi.id_dossier);
+  await supabase
+    .from("lois_parcours")
+    .delete()
+    .eq("id_dossier", loi.id_dossier);
 }
 
 main();

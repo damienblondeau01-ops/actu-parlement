@@ -47,6 +47,7 @@ type DeputeRow = {
   bio: string | null;
   datePriseFonction: string | null;
   experienceDepute: number | string | null;
+  legislature: number | string | null;
 };
 
 type SafeScores = {
@@ -56,10 +57,18 @@ type SafeScores = {
 };
 
 type RecentVote = {
-  id_an: string;
+  numero_scrutin: string;
   vote: string | null;
   titre: string | null;
   resultat: string | null;
+};
+
+type VoteBreakdown = {
+  pour: number;
+  contre: number;
+  abstention: number;
+  nv: number;
+  total: number;
 };
 
 type TabKey = "ABOUT" | "VOTES" | "ACTIVITY";
@@ -78,9 +87,14 @@ export default function DeputeDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [totalVotesCount, setTotalVotesCount] = useState<number | null>(null);
+  const [totalVotesCount, setTotalVotesCount] = useState<number | null>(
+    null
+  );
   const [recentVotes, setRecentVotes] = useState<RecentVote[]>([]);
-  const [recentVotesLoading, setRecentVotesLoading] = useState<boolean>(false);
+  const [recentVotesLoading, setRecentVotesLoading] =
+    useState<boolean>(false);
+  const [voteBreakdown, setVoteBreakdown] =
+    useState<VoteBreakdown | null>(null);
 
   const deputeName = useMemo(() => {
     if (!depute) return "";
@@ -132,7 +146,10 @@ export default function DeputeDetailScreen() {
 
   const yearsExperience = useMemo(() => {
     if (!depute) return null;
-    if (depute.experienceDepute !== null && depute.experienceDepute !== undefined) {
+    if (
+      depute.experienceDepute !== null &&
+      depute.experienceDepute !== undefined
+    ) {
       const num = computeSafeNumber(depute.experienceDepute);
       if (num !== null) return num;
     }
@@ -149,18 +166,27 @@ export default function DeputeDetailScreen() {
   }, [depute]);
 
   const mandatText = useMemo(() => {
-    if (!depute || !depute.datePriseFonction) {
-      return "Mandat en cours durant la 16ᵉ législature.";
+    if (!depute) {
+      return "Mandat en cours à l'Assemblée nationale.";
+    }
+
+    const legNum = computeSafeNumber(depute.legislature);
+    const legSuffix = legNum
+      ? `${legNum}ᵉ législature`
+      : "législature en cours";
+
+    if (!depute.datePriseFonction) {
+      return `Mandat en cours durant la ${legSuffix}.`;
     }
     const d = new Date(depute.datePriseFonction);
     if (Number.isNaN(d.getTime())) {
-      return "Mandat en cours durant la 16ᵉ législature.";
+      return `Mandat en cours durant la ${legSuffix}.`;
     }
     return `Mandat en cours depuis le ${d.toLocaleDateString("fr-FR", {
       day: "2-digit",
       month: "long",
       year: "numeric",
-    })} (16ᵉ législature).`;
+    })} (${legSuffix}).`;
   }, [depute]);
 
   const loadDepute = useCallback(async () => {
@@ -205,7 +231,8 @@ export default function DeputeDetailScreen() {
           resume,
           bio,
           datePriseFonction,
-          experienceDepute
+          experienceDepute,
+          legislature
         `
         )
         .eq("id_an", id)
@@ -248,117 +275,156 @@ export default function DeputeDetailScreen() {
     }
   }, [id]);
 
-  const loadQuickStats = useCallback(
-    async (deputeId: string) => {
-      try {
-        const { count, error } = await supabase
-          .from("votes_deputes_scrutin")
-          .select("id_an", { count: "exact", head: true })
-          .eq("id_depute", deputeId);
+  const loadQuickStats = useCallback(async (deputeId: string) => {
+    try {
+      const { count, error } = await supabase
+        .from("votes_deputes_detail")
+        .select("numero_scrutin", { count: "exact", head: true })
+        .eq("id_depute", deputeId);
 
-        if (error) {
-          console.warn(
-            "[DEPUTE SCREEN] Erreur chargement stats rapides =",
-            error
-          );
-          return;
-        }
-
-        setTotalVotesCount(count ?? null);
-      } catch (e) {
+      if (error) {
         console.warn(
-          "[DEPUTE SCREEN] Erreur inattendue stats rapides =",
-          e
+          "[DEPUTE SCREEN] Erreur chargement stats rapides =",
+          error
         );
+        return;
       }
-    },
-    []
-  );
 
-  const loadRecentVotes = useCallback(
-    async (deputeId: string) => {
-      try {
-        setRecentVotesLoading(true);
-        setRecentVotes([]);
+      setTotalVotesCount(count ?? null);
+    } catch (e) {
+      console.warn("[DEPUTE SCREEN] Erreur inattendue stats rapides =", e);
+    }
+  }, []);
 
-        const { data: votes, error: votesError } = await supabase
-          .from("votes_deputes_scrutin")
-          .select("id_an, vote")
-          .eq("id_depute", deputeId)
-          .order("id_an", { ascending: false })
-          .limit(5);
+  const loadRecentVotes = useCallback(async (deputeId: string) => {
+    try {
+      setRecentVotesLoading(true);
+      setRecentVotes([]);
 
-        if (votesError) {
-          console.warn(
-            "[DEPUTE SCREEN] Erreur chargement votes récents =",
-            votesError
-          );
-          return;
-        }
+      // 1️⃣ On récupère les 5 derniers votes du député via la vue votes_deputes_detail
+      const { data: votes, error: votesError } = await supabase
+        .from("votes_deputes_detail")
+        .select("numero_scrutin, vote")
+        .eq("id_depute", deputeId)
+        .order("numero_scrutin", { ascending: false })
+        .limit(5);
 
-        if (!votes || votes.length === 0) {
-          return;
-        }
-
-        const ids = votes
-          .map((v: any) => v.id_an as string | null)
-          .filter((v): v is string => !!v);
-
-        if (ids.length === 0) {
-          return;
-        }
-
-        const { data: scrutins, error: scrutinsError } = await supabase
-          .from("scrutins_data")
-          .select("id_an, titre, resultat")
-          .in("id_an", ids);
-
-        if (scrutinsError) {
-          console.warn(
-            "[DEPUTE SCREEN] Erreur chargement scrutins récents =",
-            scrutinsError
-          );
-          return;
-        }
-
-        const scrutinsById =
-          scrutins?.reduce<
-            Record<string, { titre: string | null; resultat: string | null }>
-          >((acc: any, s: any) => {
-            if (s.id_an) {
-              acc[s.id_an] = {
-                titre: s.titre ?? null,
-                resultat: s.resultat ?? null,
-              };
-            }
-            return acc;
-          }, {}) ?? {};
-
-        const merged: RecentVote[] = (votes as any[]).map((v) => {
-          const info = scrutinsById[v.id_an] ?? {
-            titre: null,
-            resultat: null,
-          };
-          return {
-            id_an: v.id_an,
-            vote: v.vote ?? null,
-            titre: info.titre,
-            resultat: info.resultat,
-          };
-        });
-
-        setRecentVotes(merged);
-      } catch (e) {
+      if (votesError) {
         console.warn(
-          "[DEPUTE SCREEN] Erreur inattendue votes récents =",
-          e
+          "[DEPUTE SCREEN] Erreur chargement votes récents =",
+          votesError
         );
-      } finally {
-        setRecentVotesLoading(false);
+        return;
       }
-    },
-    []
-  );
+
+      if (!votes || votes.length === 0) {
+        return;
+      }
+
+      // 2️⃣ On regarde les scrutins correspondants dans scrutins_data
+      const numeros = votes
+        .map((v: any) => v.numero_scrutin as string | null)
+        .filter((v): v is string => !!v);
+
+      if (numeros.length === 0) {
+        return;
+      }
+
+      const { data: scrutins, error: scrutinsError } = await supabase
+        .from("scrutins_data")
+        .select("numero, titre, resultat")
+        .in("numero", numeros);
+
+      if (scrutinsError) {
+        console.warn(
+          "[DEPUTE SCREEN] Erreur chargement scrutins récents =",
+          scrutinsError
+        );
+        return;
+      }
+
+      const scrutinsByNumero =
+        scrutins?.reduce<
+          Record<string, { titre: string | null; resultat: string | null }>
+        >((acc: any, s: any) => {
+          if (s.numero !== null && s.numero !== undefined) {
+            const key = String(s.numero);
+            acc[key] = {
+              titre: s.titre ?? null,
+              resultat: s.resultat ?? null,
+            };
+          }
+          return acc;
+        }, {}) ?? {};
+
+      // 3️⃣ Merge votes + infos scrutins
+      const merged: RecentVote[] = (votes as any[]).map((v) => {
+        const key = String(v.numero_scrutin);
+        const info = scrutinsByNumero[key] ?? {
+          titre: null,
+          resultat: null,
+        };
+        return {
+          numero_scrutin: key,
+          vote: v.vote ?? null,
+          titre: info.titre,
+          resultat: info.resultat,
+        };
+      });
+
+      setRecentVotes(merged);
+    } catch (e) {
+      console.warn("[DEPUTE SCREEN] Erreur inattendue votes récents =", e);
+    } finally {
+      setRecentVotesLoading(false);
+    }
+  }, []);
+
+  const loadVoteBreakdown = useCallback(async (deputeId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("votes_deputes_detail")
+        .select("position, vote")
+        .eq("id_depute", deputeId);
+
+      if (error) {
+        console.warn(
+          "[DEPUTE SCREEN] Erreur chargement répartition votes =",
+          error
+        );
+        return;
+      }
+
+      let pour = 0;
+      let contre = 0;
+      let abstention = 0;
+      let nv = 0;
+
+      (data ?? []).forEach((row: any) => {
+        const raw = (
+          row.position ?? row.vote ?? ""
+        ).toString().toLowerCase();
+
+        if (raw.includes("pour")) {
+          pour += 1;
+        } else if (raw.includes("contre")) {
+          contre += 1;
+        } else if (raw.includes("abst")) {
+          abstention += 1;
+        } else {
+          nv += 1;
+        }
+      });
+
+      const total = pour + contre + abstention + nv;
+      setVoteBreakdown({ pour, contre, abstention, nv, total });
+    } catch (e) {
+      console.warn(
+        "[DEPUTE SCREEN] Erreur inattendue répartition votes =",
+        e
+      );
+    }
+  }, []);
 
   useEffect(() => {
     loadDepute();
@@ -366,10 +432,12 @@ export default function DeputeDetailScreen() {
 
   useEffect(() => {
     if (id) {
+      // id = id_an du député (ex: PA123456)
       loadQuickStats(id);
       loadRecentVotes(id);
+      loadVoteBreakdown(id);
     }
-  }, [id, loadQuickStats, loadRecentVotes]);
+  }, [id, loadQuickStats, loadRecentVotes, loadVoteBreakdown]);
 
   const renderTabButton = (key: TabKey, label: string) => {
     const active = activeTab === key;
@@ -603,9 +671,19 @@ export default function DeputeDetailScreen() {
                   }
 
                   return (
-                    <View key={vote.id_an} style={styles.recentVoteCard}>
-                      <Text style={styles.recentVoteTitle} numberOfLines={2}>
-                        {vote.titre || `Scrutin ${vote.id_an}`}
+                    <Pressable
+                      key={vote.numero_scrutin}
+                      style={styles.recentVoteCard}
+                      onPress={() =>
+                        router.push(`/scrutins/${vote.numero_scrutin}`)
+                      }
+                    >
+                      <Text
+                        style={styles.recentVoteTitle}
+                        numberOfLines={2}
+                      >
+                        {vote.titre ||
+                          `Scrutin n°${vote.numero_scrutin}`}
                       </Text>
                       <View style={styles.recentVoteMetaRow}>
                         <View
@@ -622,7 +700,7 @@ export default function DeputeDetailScreen() {
                           </Text>
                         )}
                       </View>
-                    </View>
+                    </Pressable>
                   );
                 })}
             </View>
@@ -658,7 +736,9 @@ export default function DeputeDetailScreen() {
             <View style={styles.quickContextCard}>
               <View style={styles.quickContextRow}>
                 <View style={styles.quickContextItem}>
-                  <Text style={styles.quickContextLabel}>Scrutins votés</Text>
+                  <Text style={styles.quickContextLabel}>
+                    Scrutins votés
+                  </Text>
                   <Text style={styles.quickContextValue}>
                     {totalVotesCount !== null ? totalVotesCount : "—"}
                   </Text>
@@ -677,6 +757,46 @@ export default function DeputeDetailScreen() {
                 </View>
               </View>
             </View>
+
+            {voteBreakdown && (
+              <View style={[styles.quickContextCard, { marginTop: 8 }]}>
+                <Text style={styles.timelineTitle}>
+                  Répartition des votes
+                </Text>
+                <View style={styles.voteDistRow}>
+                  <View style={styles.voteDistItem}>
+                    <Text style={styles.voteDistLabel}>Pour</Text>
+                    <Text style={styles.voteDistValue}>
+                      {voteBreakdown.pour}
+                    </Text>
+                  </View>
+                  <View style={styles.voteDistItem}>
+                    <Text style={styles.voteDistLabel}>Contre</Text>
+                    <Text style={styles.voteDistValue}>
+                      {voteBreakdown.contre}
+                    </Text>
+                  </View>
+                  <View style={styles.voteDistItem}>
+                    <Text style={styles.voteDistLabel}>Abstention</Text>
+                    <Text style={styles.voteDistValue}>
+                      {voteBreakdown.abstention}
+                    </Text>
+                  </View>
+                  <View style={styles.voteDistItem}>
+                    <Text style={styles.voteDistLabel}>Non votant</Text>
+                    <Text style={styles.voteDistValue}>
+                      {voteBreakdown.nv}
+                    </Text>
+                  </View>
+                </View>
+                {voteBreakdown.total > 0 && (
+                  <Text style={styles.paragraphSecondary}>
+                    Total : {voteBreakdown.total} votes nominatifs
+                    recensés pour ce député.
+                  </Text>
+                )}
+              </View>
+            )}
 
             <View style={styles.timelineContainer}>
               <Text style={styles.timelineTitle}>Timeline du mandat</Text>
@@ -707,8 +827,7 @@ export default function DeputeDetailScreen() {
         {/* Footer dans la zone scrollable */}
         <View style={styles.footerNoteContainer}>
           <Text style={styles.footerNote}>
-            Données officielles — Assemblée nationale OpenData (16ᵉ
-            législature).
+            Données officielles — Assemblée nationale OpenData.
           </Text>
         </View>
       </ScrollView>
@@ -762,9 +881,7 @@ const styles = StyleSheet.create({
   },
 
   // 🔹 HEADER FIXE
-  headerFixed: {
-    // Pas de flex, c'est juste une zone fixe en haut
-  },
+  headerFixed: {},
   headerContainer: {
     marginBottom: 0,
   },
@@ -844,7 +961,7 @@ const styles = StyleSheet.create({
   },
 
   headerCard: {
-    marginTop: 54, // un peu plus d'espace entre photo et encart
+    marginTop: 54,
     marginHorizontal: 16,
     paddingVertical: 12,
     paddingHorizontal: 14,
@@ -1041,6 +1158,29 @@ const styles = StyleSheet.create({
   },
   quickContextValue: {
     fontSize: 15,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+
+  // Répartition des votes
+  voteDistRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 8,
+    marginBottom: 4,
+    gap: 8,
+  },
+  voteDistItem: {
+    flex: 1,
+    paddingVertical: 4,
+  },
+  voteDistLabel: {
+    fontSize: 11,
+    color: theme.colors.subtext,
+    marginBottom: 2,
+  },
+  voteDistValue: {
+    fontSize: 14,
     fontWeight: "700",
     color: theme.colors.text,
   },

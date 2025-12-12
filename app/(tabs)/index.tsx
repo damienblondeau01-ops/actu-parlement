@@ -13,12 +13,25 @@ import { supabase } from "../../lib/supabaseClient";
 import { theme } from "../../lib/theme";
 import { AppHeader } from "../../lib/AppHeader";
 
+/* ---------------- Helper date ---------------- */
+function formatDate(dateStr?: string | null) {
+  if (!dateStr) return "Date inconnue";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 /* ---------------- Types ---------------- */
 type Loi = {
   loi_id: string;
   titre_loi: string | null;
   nb_scrutins_total: number | null;
-  derniere_date_scrutin?: string | null;
+  date_premier_scrutin?: string | null;
+  date_dernier_scrutin?: string | null;
 };
 
 type Scrutin = {
@@ -49,20 +62,40 @@ export default function HomeScreen() {
 
   useEffect(() => {
     const load = async () => {
-      const { data: loisData } = await supabase
+      const { data: loisData, error: loisError } = await supabase
         .from("lois_recent")
-        .select("*")
+        .select(
+          `
+          loi_id,
+          titre_loi,
+          nb_scrutins_total,
+          date_premier_scrutin,
+          date_dernier_scrutin
+        `
+        )
         .limit(6);
 
-      const { data: scrData } = await supabase
+      if (loisError) {
+        console.warn("Erreur chargement lois_recent :", loisError);
+      }
+
+      const { data: scrData, error: scrError } = await supabase
         .from("scrutins_recents")
         .select("*")
         .limit(6);
 
-      const { data: depData } = await supabase
+      if (scrError) {
+        console.warn("Erreur chargement scrutins_recents :", scrError);
+      }
+
+      const { data: depData, error: depError } = await supabase
         .from("deputes_top_activite")
         .select("*")
         .limit(6);
+
+      if (depError) {
+        console.warn("Erreur chargement deputes_top_activite :", depError);
+      }
 
       setLoisRecent(loisData ?? []);
       setScrutinsRecent(scrData ?? []);
@@ -149,9 +182,9 @@ export default function HomeScreen() {
             <Text style={styles.cardMeta}>
               {l.nb_scrutins_total ?? 0} scrutins liés
             </Text>
-            {l.derniere_date_scrutin && (
+            {l.date_dernier_scrutin && (
               <Text style={styles.cardMetaSmall}>
-                Dernier vote : {l.derniere_date_scrutin.slice(0, 10)}
+                Dernier vote : {formatDate(l.date_dernier_scrutin)}
               </Text>
             )}
           </Pressable>
@@ -178,7 +211,7 @@ export default function HomeScreen() {
               {s.titre || "(Sans titre)"}
             </Text>
             <Text style={styles.cardMeta}>
-              {s.date_scrutin?.slice(0, 10) || "Date inconnue"}
+              {s.date_scrutin ? formatDate(s.date_scrutin) : "Date inconnue"}
             </Text>
             {s.resultat && (
               <Text style={styles.resultBadge}>{s.resultat}</Text>
@@ -189,11 +222,13 @@ export default function HomeScreen() {
 
       {/* ================= Députés les plus actifs ================= */}
       <View style={styles.sectionHeader}>
-        <Text style={styles.blockTitle}>👥 Députés les plus actifs</Text>
-        <Pressable onPress={() => router.push("/deputes")}>
-          <Text style={styles.seeAll}>Liste complète</Text>
-        </Pressable>
-      </View>
+  <Text style={styles.blockTitle}>
+    👥 Députés les plus actifs
+  </Text>
+  <Pressable onPress={() => router.push("/deputes")}>
+    <Text style={styles.seeAll}>Liste complète</Text>
+  </Pressable>
+</View>
 
       {deputesTop.map((d) => (
         <Pressable
@@ -293,7 +328,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: "rgba(168, 85, 247, 0.4)", // petite touche violet
+    borderColor: "rgba(168, 85, 247, 0.4)",
   },
   aiTitle: {
     fontSize: 14,

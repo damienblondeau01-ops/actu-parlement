@@ -1,4 +1,4 @@
-// ingestion/push_scrutins_to_supabase.js
+// ingestion/scrutins/push_scrutins_to_supabase.js
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
@@ -86,46 +86,12 @@ function extractVotesArray(scrutin) {
   return [];
 }
 
-// 🧱 Construction d’une ligne pour votes_deputes_scrutin
-function buildVoteRow(base) {
-  const { legislature, numero_scrutin, vote } = base;
-
-  const nom_depute =
-    vote.nom_depute ||
-    vote.nomDepute ||
-    vote.nomComplet ||
-    vote.nom_complet ||
-    vote.nom ||
-    null;
-
-  const groupe =
-    vote.groupe ||
-    vote.groupeAbrev ||
-    vote.groupe_abrev ||
-    null;
-
-  const position =
-    vote.position ||
-    vote.vote ||
-    vote.sens ||
-    null;
-
-  // ⚠️ On ne met pas id_an_depute tant qu’on n’est pas sûr de la colonne côté DB
-  return {
-    numero_scrutin,
-    legislature,
-    nom_depute,
-    groupe,
-    position,
-  };
-}
-
-// 🔄 Upsert d’un scrutin + ses votes
+// 🔄 Upsert d’un scrutin (⚠️ ne gère plus les votes ici)
 async function upsertScrutin(scrutin, defaultLegislature) {
   const numero_scrutin = extractNumeroScrutin(scrutin);
   if (!numero_scrutin) {
     console.warn("⚠️ Scrutin sans numero_scrutin, ignoré :", scrutin);
-    return { skipped: true };
+    return { skipped: true, insertedVotes: 0 };
   }
 
   const legislature =
@@ -150,7 +116,7 @@ async function upsertScrutin(scrutin, defaultLegislature) {
     throw deleteScrutinError;
   }
 
-  // 2️⃣ On insère une nouvelle ligne propre
+  // 2️⃣ On insère une nouvelle ligne propre (tu peux enrichir plus tard)
   const { error: insertScrutinError } = await supabase
     .from("scrutins_enrichis")
     .insert({
@@ -168,52 +134,17 @@ async function upsertScrutin(scrutin, defaultLegislature) {
 
   console.log(`✅ Scrutin n°${numero_scrutin} enregistré dans scrutins_enrichis.`);
 
-  // 🔁 Gestion des votes
+  // 🔁 Votes : **simple diagnostic, plus d’écriture en base**
   const votes = extractVotesArray(scrutin);
   console.log(
-    `🗳️  Votes trouvés pour le scrutin ${numero_scrutin} : ${votes.length}`
+    `🗳️  Votes trouvés pour le scrutin ${numero_scrutin} (diagnostic uniquement) : ${votes.length}`
   );
-
-  // On supprime les anciens votes pour ce scrutin
-  const { error: deleteVotesError } = await supabase
-    .from("votes_deputes_scrutin")
-    .delete()
-    .eq("numero_scrutin", numero_scrutin);
-
-  if (deleteVotesError) {
-    console.error(
-      `❌ Erreur suppression anciens votes (${numero_scrutin}) :`,
-      deleteVotesError.message || deleteVotesError
-    );
-    throw deleteVotesError;
-  }
-
-  if (votes.length === 0) {
-    console.log("ℹ️ Aucun vote à insérer pour ce scrutin.");
-    return { insertedVotes: 0 };
-  }
-
-  const rows = votes.map((vote) =>
-    buildVoteRow({ legislature, numero_scrutin, vote })
-  );
-
-  const { error: insertVotesError } = await supabase
-    .from("votes_deputes_scrutin")
-    .insert(rows);
-
-  if (insertVotesError) {
-    console.error(
-      `❌ Erreur insertion votes_deputes_scrutin (${numero_scrutin}) :`,
-      insertVotesError.message || insertVotesError
-    );
-    throw insertVotesError;
-  }
-
   console.log(
-    `✅ ${rows.length} votes insérés pour le scrutin n°${numero_scrutin}.`
+    "ℹ️ Les votes ne sont plus insérés par ce script.\n" +
+      "   Source officielle des votes = ingestion/votes/fetch_votes_from_opendata.js"
   );
 
-  return { insertedVotes: rows.length };
+  return { insertedVotes: 0, skipped: false };
 }
 
 // 🚀 Main
@@ -240,7 +171,7 @@ async function main() {
         skipped++;
       } else {
         okCount++;
-        voteCountTotal += res?.insertedVotes || 0;
+        voteCountTotal += res?.insertedVotes || 0; // restera 0 dans ce script
       }
     } catch (err) {
       console.error("❌ Erreur pendant le traitement d’un scrutin :", err);
@@ -249,7 +180,7 @@ async function main() {
 
   console.log("\n🎯 Bilan :");
   console.log(`   ✅ Scrutins enregistrés : ${okCount}`);
-  console.log(`   🗳️ Votes insérés       : ${voteCountTotal}`);
+  console.log(`   🗳️ Votes insérés       : ${voteCountTotal} (0 ici, gérés ailleurs)`);
   console.log(`   ⚠️ Scrutins ignorés     : ${skipped}`);
   console.log("🎉 Terminé.");
 }

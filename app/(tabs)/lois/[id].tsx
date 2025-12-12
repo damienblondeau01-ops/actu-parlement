@@ -29,6 +29,22 @@ type Loi = {
   resume_court?: string | null;
 };
 
+type GroupeStatsLoi = {
+  loi_id: string | null;
+  legislature: number | null;
+  groupe: string | null;
+  nb_votes: number | null;
+  nb_pour: number | null;
+  nb_contre: number | null;
+  nb_abstention: number | null;
+  nb_nv: number | null;
+  nb_scrutins: number | null;
+  pct_pour: number | null;
+  pct_contre: number | null;
+  pct_abstention: number | null;
+  color_hex: string | null;
+};
+
 type ScrutinTimelineItem = {
   numero_scrutin: string;
   loi_id: string | null;
@@ -38,6 +54,7 @@ type ScrutinTimelineItem = {
   resultat: string | null;
   kind: string | null;
   article_ref: string | null;
+  legislature?: number | null;
 };
 
 type VotesParLoi = {
@@ -70,11 +87,15 @@ export default function LoiDetailScreen() {
   const [loadingVotes, setLoadingVotes] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [groupStats, setGroupStats] = useState<GroupeStatsLoi[]>([]);
+  const [groupStatsLoading, setGroupStatsLoading] = useState<boolean>(false);
+
   useEffect(() => {
     if (!id) {
       setError("Aucun identifiant de loi fourni.");
       setLoading(false);
       setLoadingVotes(false);
+      setGroupStatsLoading(false);
       return;
     }
 
@@ -83,6 +104,7 @@ export default function LoiDetailScreen() {
     const run = async () => {
       setLoading(true);
       setLoadingVotes(true);
+      setGroupStatsLoading(true);
       setError(null);
 
       try {
@@ -90,18 +112,18 @@ export default function LoiDetailScreen() {
 
         // 1️⃣ Charger la loi depuis lois_app (vue agrégée)
         const { data: loiRow, error: loiError } = await supabase
-  .from("lois_app")
-  .select(
-    `
-    loi_id,
-    titre_loi,
-    nb_scrutins_total,
-    nb_articles,
-    nb_amendements
-  `
-  )
-  .eq("loi_id", loiId)
-  .maybeSingle();
+          .from("lois_app")
+          .select(
+            `
+            loi_id,
+            titre_loi,
+            nb_scrutins_total,
+            nb_articles,
+            nb_amendements
+          `
+          )
+          .eq("loi_id", loiId)
+          .maybeSingle();
 
         if (loiError) {
           throw loiError;
@@ -113,9 +135,9 @@ export default function LoiDetailScreen() {
           );
         }
 
-        // 2️⃣ Charger la timeline des scrutins (scrutins_data)
+        // 2️⃣ Timeline des scrutins via la vue scrutins_par_loi
         const { data: scrutinsRows, error: scrError } = await supabase
-          .from("scrutins_data")
+          .from("scrutins_par_loi")
           .select(
             `
             numero_scrutin:numero,
@@ -125,7 +147,8 @@ export default function LoiDetailScreen() {
             objet,
             resultat,
             kind,
-            article_ref
+            article_ref,
+            legislature
           `
           )
           .eq("loi_id", loiId)
@@ -135,7 +158,7 @@ export default function LoiDetailScreen() {
           throw scrError;
         }
 
-        // 3️⃣ Charger la synthèse des votes (vue votes_par_loi)
+        // 3️⃣ Synthèse des votes (vue votes_par_loi)
         const { data: votesRows, error: votesError } = await supabase
           .from("votes_par_loi")
           .select(
@@ -151,10 +174,13 @@ export default function LoiDetailScreen() {
           .eq("loi_id", loiId);
 
         if (votesError) {
-          console.warn("[LOI DETAIL] Erreur chargement votes_par_loi", votesError);
+          console.warn(
+            "[LOI DETAIL] Erreur chargement votes_par_loi",
+            votesError
+          );
         }
 
-        // 4️⃣ Charger le texte de la loi (si disponible)
+        // 4️⃣ Texte de la loi (lois_textes)
         const { data: texteRow, error: texteError } = await supabase
           .from("lois_textes")
           .select(
@@ -174,9 +200,40 @@ export default function LoiDetailScreen() {
           console.warn("[LOI DETAIL] Erreur chargement lois_textes", texteError);
         }
 
+        // 5️⃣ Stats par groupe pour cette loi (stats_groupes_par_loi)
+        const { data: statsRows, error: statsError } = await supabase
+          .from("stats_groupes_par_loi")
+          .select(
+            `
+            loi_id,
+            legislature,
+            groupe,
+            nb_votes,
+            nb_pour,
+            nb_contre,
+            nb_abstention,
+            nb_nv,
+            nb_scrutins,
+            pct_pour,
+            pct_contre,
+            pct_abstention,
+            color_hex
+          `
+          )
+          .eq("loi_id", loiId)
+          .order("nb_votes", { ascending: false });
+
+        if (statsError) {
+          console.warn(
+            "[LOI DETAIL] Erreur stats_groupes_par_loi =",
+            statsError
+          );
+        }
+
         if (cancelled) return;
 
         setLoi(loiRow as Loi);
+
         setScrutins(
           (scrutinsRows || []).map((s: any) => ({
             numero_scrutin: s.numero_scrutin?.toString(),
@@ -187,16 +244,21 @@ export default function LoiDetailScreen() {
             resultat: s.resultat,
             kind: s.kind,
             article_ref: s.article_ref,
+            legislature: s.legislature ?? null,
           }))
         );
+
         setVotes(
           votesRows && votesRows.length > 0
             ? (votesRows[0] as VotesParLoi)
             : null
         );
+
         setLoiTexte((texteRow || null) as LoiTexte | null);
+        setGroupStats((statsRows as GroupeStatsLoi[]) ?? []);
         setLoading(false);
         setLoadingVotes(false);
+        setGroupStatsLoading(false);
       } catch (e: any) {
         console.warn("[LOI DETAIL] Erreur chargement", e);
         if (!cancelled) {
@@ -205,8 +267,10 @@ export default function LoiDetailScreen() {
           setScrutins([]);
           setVotes(null);
           setLoiTexte(null);
+          setGroupStats([]);
           setLoading(false);
           setLoadingVotes(false);
+          setGroupStatsLoading(false);
         }
       }
     };
@@ -218,7 +282,7 @@ export default function LoiDetailScreen() {
     };
   }, [id]);
 
-  // --- Stats rapides sur les scrutins de la loi (à partir de scrutins_data) ---
+  // --- Stats rapides sur les scrutins de la loi (à partir de scrutins_par_loi) ---
   const { nbScrutinsArticle, nbScrutinsAmendement, nbScrutinsAutres } =
     useMemo(() => {
       const nbArticle = scrutins.filter((s) => s.kind === "article").length;
@@ -361,14 +425,18 @@ export default function LoiDetailScreen() {
                   <Text style={[styles.voteLabel, styles.voteAbstention]}>
                     Abstention
                   </Text>
-                  <Text style={styles.voteValue}>{votes.nb_abstention}</Text>
+                  <Text style={styles.voteValue}>
+                    {votes.nb_abstention}
+                  </Text>
                 </View>
 
                 <View style={styles.voteRow}>
                   <Text style={[styles.voteLabel, styles.voteNonVotant]}>
                     Non votant
                   </Text>
-                  <Text style={styles.voteValue}>{votes.nb_non_votant}</Text>
+                  <Text style={styles.voteValue}>
+                    {votes.nb_non_votant}
+                  </Text>
                 </View>
               </View>
             ) : (
@@ -417,6 +485,110 @@ export default function LoiDetailScreen() {
                 .
               </Text>
             )}
+          </View>
+
+          {/* 🧮 Stats par groupe pour cette loi */}
+          <View style={styles.card}>
+            <View style={styles.cardHeaderRow}>
+              <Text style={styles.sectionTitle}>Comportement des groupes</Text>
+              <Pressable onPress={() => router.push("/stats-groupes")}>
+                <Text style={styles.linkText}>Voir toutes les stats →</Text>
+              </Pressable>
+            </View>
+
+            {groupStatsLoading && (
+              <View style={styles.centerSmall}>
+                <ActivityIndicator
+                  size="small"
+                  color={theme.colors.primary}
+                />
+                <Text style={styles.grey}>
+                  Chargement des statistiques par groupe…
+                </Text>
+              </View>
+            )}
+
+            {!groupStatsLoading && groupStats.length === 0 && (
+              <Text style={styles.grey}>
+                Pas encore de statistiques agrégées pour cette loi.
+              </Text>
+            )}
+
+            {!groupStatsLoading &&
+              groupStats.map((g) => {
+                const nomGroupe = g.groupe ?? "Non renseigné";
+                const nbVotes = g.nb_votes ?? 0;
+                const pour = g.nb_pour ?? 0;
+                const contre = g.nb_contre ?? 0;
+                const abst = g.nb_abstention ?? 0;
+
+                const totalExpr = pour + contre + abst;
+                const pourPct =
+                  totalExpr > 0
+                    ? Math.round((pour * 100) / totalExpr)
+                    : g.pct_pour ?? 0;
+                const contrePct =
+                  totalExpr > 0
+                    ? Math.round((contre * 100) / totalExpr)
+                    : g.pct_contre ?? 0;
+                const abstPct =
+                  totalExpr > 0
+                    ? Math.round((abst * 100) / totalExpr)
+                    : g.pct_abstention ?? 0;
+
+                return (
+                  <View
+                    key={`${nomGroupe}-${g.legislature ?? 0}`}
+                    style={styles.groupCard}
+                  >
+                    <View style={styles.groupCardHeader}>
+                      <View style={styles.groupColorDotWrapper}>
+                        <View
+                          style={[
+                            styles.groupColorDot,
+                            g.color_hex
+                              ? { backgroundColor: g.color_hex }
+                              : { backgroundColor: "#64748b" },
+                          ]}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.groupName} numberOfLines={1}>
+                          {nomGroupe}
+                        </Text>
+                        <Text style={styles.groupMeta}>
+                          {nbVotes} vote
+                          {nbVotes > 1 ? "s" : ""} sur cette loi
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.barLabelRow}>
+                      <Text style={styles.barLabel}>
+                        Pour {pour} ({pourPct}%)
+                      </Text>
+                      <Text style={styles.barLabel}>
+                        Contre {contre} ({contrePct}%)
+                      </Text>
+                      <Text style={styles.barLabel}>
+                        Abst. {abst} ({abstPct}%)
+                      </Text>
+                    </View>
+
+                    <View style={styles.voteBar}>
+                      <View
+                        style={{ flex: pour, backgroundColor: "#16a34a" }}
+                      />
+                      <View
+                        style={{ flex: contre, backgroundColor: "#dc2626" }}
+                      />
+                      <View
+                        style={{ flex: abst, backgroundColor: "#eab308" }}
+                      />
+                    </View>
+                  </View>
+                );
+              })}
           </View>
 
           {/* 📘 Texte de la loi */}
@@ -720,6 +892,73 @@ const styles = StyleSheet.create({
   },
   voteNonVotant: {
     color: "#9ca3af", // gris
+  },
+
+  /* Stats par groupe */
+  cardHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  linkText: {
+    fontSize: 12,
+    color: theme.colors.primary,
+    fontWeight: "600",
+  },
+  centerSmall: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: 4,
+  },
+  grey: {
+    fontSize: 12,
+    color: theme.colors.subtext,
+  },
+  groupCard: {
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: theme.colors.border,
+  },
+  groupCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  groupColorDotWrapper: {
+    marginRight: 8,
+  },
+  groupColorDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  groupName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+  groupMeta: {
+    fontSize: 11,
+    color: theme.colors.subtext,
+    marginTop: 2,
+  },
+  barLabelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
+  barLabel: {
+    fontSize: 11,
+    color: theme.colors.subtext,
+  },
+  voteBar: {
+    flexDirection: "row",
+    height: 8,
+    borderRadius: 999,
+    overflow: "hidden",
+    marginTop: 6,
   },
 
   /* Texte de la loi */

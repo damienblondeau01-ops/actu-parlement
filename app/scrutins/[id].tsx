@@ -8,6 +8,7 @@ import {
   Text,
   View,
   Pressable,
+  Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { theme } from "../../lib/theme";
@@ -20,6 +21,9 @@ import { supabase } from "../../lib/supabaseClient";
 import DonutChart from "../../components/DonutChart";
 
 const colors = theme.colors;
+
+// Législature courante que tu cibles pour les derniers scrutins
+const CURRENT_LEGISLATURE = 17;
 
 /* ===========================================================
    📌 Types locaux
@@ -62,6 +66,32 @@ type GroupedVotes = {
 };
 
 /* ===========================================================
+   🧩 Helper : normaliser le numéro de scrutin
+   - "VTANR5L17V4587" -> "4587"
+   - "4587" -> "4587"
+=========================================================== */
+
+function normalizeNumeroScrutin(numero: string | number): string {
+  const raw = String(numero);
+  const match = raw.match(/(\d+)/g);
+  if (match && match.length > 0) {
+    // On prend le dernier bloc de chiffres (souvent le numéro de scrutin)
+    return match[match.length - 1];
+  }
+  return raw;
+}
+
+/**
+ * Détection simple d'un id_an de l'Assemblée (VTANR5L17Vxxxx, etc.)
+ */
+function looksLikeIdAn(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const s = String(value);
+  // Pattern assez large mais suffisant : contient "LxxV" et commence par VTAN
+  return /^VTANR?\d*L\d+V\d+/.test(s);
+}
+
+/* ===========================================================
    🟦 Mini Card Groupe (UI premium)
 =========================================================== */
 
@@ -90,6 +120,92 @@ function GroupMiniCard(props: {
         {pPour}% Pour · {pContre}% Contre · {pAbst}% Abst.
       </Text>
     </View>
+  );
+}
+
+/* ===========================================================
+   🟦 Row de vote détaillé (député)
+=========================================================== */
+
+function VoteRow({
+  vote,
+  onPress,
+}: {
+  vote: VoteDeputeScrutin;
+  onPress?: () => void;
+}) {
+  const fullName =
+    vote.nom_depute ||
+    `${(vote as any).prenom ?? ""} ${(vote as any).nom ?? ""}`.trim() ||
+    "Député inconnu";
+
+  const groupLabel =
+    (vote as any).groupe_actuel ||
+    (vote as any).groupe_abrev_actuel ||
+    (vote as any).groupe_abrev_opendata ||
+    (vote as any).groupe_id_opendata ||
+    (vote as any).groupe ||
+    (vote as any).groupeAbrev ||
+    (vote as any).groupe_abrev ||
+    "Groupe inconnu";
+
+  const rawPosition = (vote.position ?? (vote as any).vote ?? "")
+    .toString()
+    .toLowerCase();
+
+  let pillLabel = "Non votant";
+  let pillBg = "#64748b"; // gris
+  let pillText = "#0f172a";
+
+  if (rawPosition.includes("pour")) {
+    pillLabel = "Pour";
+    pillBg = "#16a34a";
+    pillText = "#f9fafb";
+  } else if (rawPosition.includes("contre")) {
+    pillLabel = "Contre";
+    pillBg = "#dc2626";
+    pillText = "#f9fafb";
+  } else if (rawPosition.includes("abst")) {
+    pillLabel = "Abstention";
+    pillBg = "#eab308";
+    pillText = "#0f172a";
+  }
+
+  const initial =
+    fullName && fullName.trim().length > 0
+      ? fullName.trim().charAt(0).toUpperCase()
+      : "?";
+
+  return (
+    <Pressable onPress={onPress} disabled={!onPress} style={styles.voteRow}>
+      <View style={styles.voteLeft}>
+        {(vote as any).photo_url ? (
+          <Image
+            source={{ uri: (vote as any).photo_url }}
+            style={styles.voteAvatar}
+          />
+        ) : (
+          <View style={styles.voteAvatarFallback}>
+            <Text style={styles.voteAvatarInitial}>{initial}</Text>
+          </View>
+        )}
+        <View style={styles.voteTextCol}>
+          <Text style={styles.voteName} numberOfLines={1}>
+            {fullName}
+          </Text>
+          <Text style={styles.voteGroup} numberOfLines={1}>
+            {groupLabel}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.voteRight}>
+        <View style={[styles.votePill, { backgroundColor: pillBg }]}>
+          <Text style={[styles.votePillText, { color: pillText }]}>
+            {pillLabel}
+          </Text>
+        </View>
+      </View>
+    </Pressable>
   );
 }
 
@@ -133,6 +249,12 @@ export default function ScrutinDetailScreen() {
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [loiLoading, setLoiLoading] = useState<boolean>(false);
 
+  // Pour comparer la timeline au scrutin courant de manière robuste
+  const currentNumero = useMemo(
+    () => (id ? normalizeNumeroScrutin(String(id)) : null),
+    [id]
+  );
+
   /* ===========================================================
      1️⃣ Load Scrutin + Votes + Synthèse
   ============================================================ */
@@ -144,18 +266,20 @@ export default function ScrutinDetailScreen() {
       return;
     }
 
-    const numero = String(id);
+    const rawId = String(id); // ex. "VTANR5L17V4587" ou "4587"
+    const numeroNormalise = normalizeNumeroScrutin(rawId); // ex. "4587"
 
     const load = async () => {
       try {
         setLoading(true);
         setError(null);
 
+        // On garde le comportement existant : fetchScrutinAvecVotes gère le rawId
         const {
           scrutin: scrutinData,
           votes: votesData,
           error: queryError,
-        } = await fetchScrutinAvecVotes(numero);
+        } = await fetchScrutinAvecVotes(rawId);
 
         if (queryError || !scrutinData) {
           setError("Scrutin introuvable dans la base actuelle.");
@@ -169,11 +293,11 @@ export default function ScrutinDetailScreen() {
         setScrutin(scrutinData);
         setVotes(votesData ?? []);
 
-        // Synthèse SQL (votes_par_scrutin_synthese)
+        // Synthèse via votes_par_scrutin_synthese avec le NUMÉRO NORMALISÉ
         const { data: synthRows, error: synthError } = await supabase
           .from("votes_par_scrutin_synthese")
           .select("*")
-          .eq("numero_scrutin", numero);
+          .eq("numero_scrutin", numeroNormalise);
 
         if (synthError) {
           console.warn(
@@ -187,7 +311,8 @@ export default function ScrutinDetailScreen() {
           setSyntheseVotes(null);
         }
 
-        await loadLoiEtTimeline(numero);
+        // Loi + timeline : on durcit la logique d'association
+        await loadLoiEtTimeline(numeroNormalise, rawId);
         setLoading(false);
       } catch (e: any) {
         console.warn("[SCRUTIN DETAIL] Erreur inattendue:", e);
@@ -199,33 +324,61 @@ export default function ScrutinDetailScreen() {
     load();
   }, [id]);
 
-  async function loadLoiEtTimeline(numero: string) {
+  /**
+   * 🔐 Durci :
+   * 1. On tente d'abord de trouver la loi via id_an (si l'ID ressemble à un id_an AN).
+   * 2. Si échec, fallback via numero + legislature.
+   */
+  async function loadLoiEtTimeline(numero: string, scrutinKey?: string) {
     try {
       setLoiLoading(true);
 
-      // Récupérer loi_id à partir du scrutin
-      const { data: sd, error: sdError } = await supabase
-        .from("scrutins_data")
-        .select("loi_id")
-        .eq("numero", numero)
-        .maybeSingle();
+      let loiId: string | null = null;
 
-      if (sdError) {
-        console.warn("[SCRUTIN DETAIL] Erreur scrutins_data:", sdError);
+      // 1️⃣ Tentative par id_an (clé unique AN)
+      if (looksLikeIdAn(scrutinKey)) {
+        const { data: byId, error: byIdError } = await supabase
+          .from("scrutins_data")
+          .select("loi_id")
+          .eq("id_an", scrutinKey)
+          .maybeSingle();
+
+        if (byIdError) {
+          console.warn(
+            "[SCRUTIN DETAIL] Erreur scrutins_data (lookup par id_an):",
+            byIdError
+          );
+        } else if (byId && byId.loi_id) {
+          loiId = byId.loi_id as string;
+        }
+      }
+
+      // 2️⃣ Fallback par numero + legislature
+      if (!loiId) {
+        const { data: byNumero, error: byNumeroError } = await supabase
+          .from("scrutins_data")
+          .select("loi_id")
+          .eq("numero", numero)
+          .eq("legislature", CURRENT_LEGISLATURE)
+          .maybeSingle();
+
+        if (byNumeroError) {
+          console.warn(
+            "[SCRUTIN DETAIL] Erreur scrutins_data (lookup par numero):",
+            byNumeroError
+          );
+        } else if (byNumero && byNumero.loi_id) {
+          loiId = byNumero.loi_id as string;
+        }
+      }
+
+      if (!loiId) {
+        // On n'a pas réussi à associer ce scrutin à une loi
         setLoi(null);
         setTimeline([]);
         setLoiLoading(false);
         return;
       }
-
-      if (!sd?.loi_id) {
-        setLoi(null);
-        setTimeline([]);
-        setLoiLoading(false);
-        return;
-      }
-
-      const loiId = sd.loi_id as string;
 
       // Loi associée
       const { data: loiData, error: loiError } = await supabase
@@ -268,10 +421,7 @@ export default function ScrutinDetailScreen() {
         .order("date_scrutin", { ascending: true });
 
       if (scrError) {
-        console.warn(
-          "[SCRUTIN DETAIL] Erreur scrutins_loi_enrichis:",
-          scrError
-        );
+        console.warn("[SCRUTIN DETAIL] Erreur scrutins_loi_enrichis:", scrError);
         setTimeline([]);
       } else {
         const mapped: TimelineItem[] =
@@ -307,8 +457,12 @@ export default function ScrutinDetailScreen() {
     for (const v of votes) {
       const anyV = v as any;
 
-      // Nom du groupe : on essaie plusieurs champs possibles
+      // Nom du groupe : on cible d'abord les colonnes de la vue votes_deputes_detail
       const rawGroup =
+        anyV.groupe_actuel ??
+        anyV.groupe_abrev_actuel ??
+        anyV.groupe_id_opendata ??
+        anyV.groupe_abrev_opendata ??
         anyV.groupe ??
         anyV.groupeAbrev ??
         anyV.groupe_abrev ??
@@ -353,10 +507,8 @@ export default function ScrutinDetailScreen() {
      3️⃣ Stats Calculées (pour/contre/abstention)
   ============================================================ */
 
-  const nbPour: number =
-    syntheseVotes?.nb_pour ?? scrutin?.nb_pour ?? 0;
-  const nbContre: number =
-    syntheseVotes?.nb_contre ?? scrutin?.nb_contre ?? 0;
+  const nbPour: number = syntheseVotes?.nb_pour ?? scrutin?.nb_pour ?? 0;
+  const nbContre: number = syntheseVotes?.nb_contre ?? scrutin?.nb_contre ?? 0;
   const nbAbst: number =
     syntheseVotes?.nb_abstention ?? scrutin?.nb_abstention ?? 0;
 
@@ -444,19 +596,9 @@ export default function ScrutinDetailScreen() {
               <Text style={styles.grey}>Loi {loi.loi_id}</Text>
 
               <View style={styles.row}>
-                <Chip
-                  label={`Scrutins ${
-                    loi.nb_scrutins_total ?? "—"
-                  }`}
-                />
-                <Chip
-                  label={`Articles ${loi.nb_articles ?? "—"}`}
-                />
-                <Chip
-                  label={`Amendements ${
-                    loi.nb_amendements ?? "—"
-                  }`}
-                />
+                <Chip label={`Scrutins ${loi.nb_scrutins_total ?? "—"}`} />
+                <Chip label={`Articles ${loi.nb_articles ?? "—"}`} />
+                <Chip label={`Amendements ${loi.nb_amendements ?? "—"}`} />
               </View>
 
               <Pressable
@@ -510,11 +652,7 @@ export default function ScrutinDetailScreen() {
         {/* DONUT CHART */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Répartition visuelle</Text>
-          <DonutChart
-            pour={nbPour}
-            contre={nbContre}
-            abstention={nbAbst}
-          />
+          <DonutChart pour={nbPour} contre={nbContre} abstention={nbAbst} />
         </View>
 
         {/* TIMELINE DE LA LOI */}
@@ -528,7 +666,8 @@ export default function ScrutinDetailScreen() {
             )}
             {timeline.map((item: TimelineItem) => {
               const isCurrent =
-                id && String(item.numero_scrutin) === String(id);
+                currentNumero &&
+                String(item.numero_scrutin) === String(currentNumero);
               return (
                 <Pressable
                   key={item.numero_scrutin}
@@ -625,9 +764,47 @@ export default function ScrutinDetailScreen() {
                 <Text style={styles.grey}>
                   {total} député
                   {total > 1 ? "s" : ""} — Pour {g.pour.length}, Contre{" "}
-                  {g.contre.length}, Abstention {g.abst.length}, Non
-                  votant {g.nv.length}
+                  {g.contre.length}, Abstention {g.abst.length}, Non votant{" "}
+                  {g.nv.length}
                 </Text>
+              </View>
+            );
+          })}
+        </View>
+
+        {/* 🟦 Votes détaillés par député */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Votes détaillés</Text>
+
+          {groupedVotes.length === 0 && (
+            <Text style={styles.grey}>
+              Aucun vote disponible pour ce scrutin.
+            </Text>
+          )}
+
+          {groupedVotes.map((g: GroupedVotes) => {
+            const allVotes = [
+              ...g.pour,
+              ...g.contre,
+              ...g.abst,
+              ...g.nv,
+            ];
+            if (allVotes.length === 0) return null;
+
+            return (
+              <View key={g.groupe} style={styles.groupBlock}>
+                <Text style={styles.groupTitle}>{g.groupe}</Text>
+                {allVotes.map((v) => (
+                  <VoteRow
+                    key={`${g.groupe}-${v.id_depute}-${v.position}`}
+                    vote={v}
+                    onPress={
+                      v.id_depute
+                        ? () => router.push(`/deputes/${v.id_depute}`)
+                        : undefined
+                    }
+                  />
+                ))}
               </View>
             );
           })}
@@ -893,5 +1070,66 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: colors.primary,
+  },
+
+  /* VOTE ROW */
+  voteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  voteLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 8,
+  },
+  voteAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  voteAvatarFallback: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  voteAvatarInitial: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  voteTextCol: {
+    flex: 1,
+  },
+  voteName: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  voteGroup: {
+    color: colors.subtext,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  voteRight: {
+    marginLeft: 8,
+  },
+  votePill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  votePillText: {
+    fontSize: 11,
+    fontWeight: "600",
   },
 });
