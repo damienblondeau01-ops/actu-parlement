@@ -4,13 +4,14 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import pg from "pg";
+import dns from "dns/promises";
 
 const { Client } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ charge ingestion/.env si présent (local). En CI, pas obligatoire.
+// ✅ charge ingestion/.env si présent (local)
 const envPath = path.join(__dirname, ".env");
 if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
@@ -19,69 +20,75 @@ if (fs.existsSync(envPath)) {
   console.log("ℹ️ Pas de ingestion/.env (normal en CI).");
 }
 
-function getEnv(name) {
+function mustGetEnv(name) {
   const v = process.env[name];
   return v && String(v).trim().length > 0 ? String(v).trim() : null;
 }
 
-function redactConn(conn) {
-  // masque le password pour éviter de le logguer par accident
-  // ex: postgresql://user:pass@host/db -> postgresql://user:***@host/db
-  return conn.replace(/\/\/([^:/?#]+):([^@]+)@/g, "//$1:***@");
+function ensureSslModeRequire(conn) {
+  if (/sslmode=/.test(conn)) return conn;
+  return conn.includes("?") ? `${conn}&sslmode=require` : `${conn}?sslmode=require`;
 }
 
 async function main() {
   console.log("🔌 Connexion Postgres directe (no HTTP timeout)");
 
-  const conn =
-    getEnv("SUPABASE_DB_URL") ||
-    getEnv("DATABASE_URL") ||
-    getEnv("SUPABASE_DATABASE_URL");
+  let conn =
+    mustGetEnv("SUPABASE_DB_URL") ||
+    mustGetEnv("DATABASE_URL") ||
+    mustGetEnv("SUPABASE_DATABASE_URL");
 
   if (!conn) {
-    console.error(
-      "❌ Aucune URL Postgres trouvée. Ajoute SUPABASE_DB_URL (ou DATABASE_URL) dans ingestion/.env"
-    );
+    console.error("❌ Aucune URL Postgres trouvée. Ajoute SUPABASE_DB_URL (ou DATABASE_URL).");
     process.exitCode = 1;
     return;
   }
 
-  // ✅ TLS “propre” : on gère SSL uniquement sur CETTE connexion
-  // Par défaut on met rejectUnauthorized=false (Souvent nécessaire sur Supabase depuis Node/Windows)
-  // Tu peux forcer le mode strict avec: PG_SSL_REJECT_UNAUTHORIZED=1
-  const strictSsl = getEnv("PG_SSL_REJECT_UNAUTHORIZED") === "1";
+  conn = ensureSslModeRequire(conn);
+
+  // ✅ Parse URL
+  const u = new URL(conn);
+  const host = u.hostname;
+  const port = Number(u.port || 5432);
+  const database = u.pathname.replace("/", "") || "postgres";
+  const user = decodeURIComponent(u.username || "postgres");
+  const password = decodeURIComponent(u.password || "");
+
+  // ✅ Forcer IPv4 (évite ENETUNREACH IPv6 sur GitHub Actions)
+  let ipv4 = host;
+  try {
+    const res = await dns.lookup(host, { family: 4 });
+    ipv4 = res.address;
+  } catch (e) {
+    console.warn("⚠️ Impossible de résoudre en IPv4, tentative DNS normal:", e?.message ?? e);
+  }
+
+  console.log(`   DB host = ${host} → IPv4 = ${ipv4}:${port}/${database}`);
+  console.log("   SSL rejectUnauthorized = false (lenient)");
 
   const client = new Client({
-    connectionString: conn,
-    ssl: strictSsl ? { rejectUnauthorized: true } : { rejectUnauthorized: false },
-    application_name: "actu-parlement-refresh-mvs",
+    host: ipv4,            // ✅ IPv4 direct
+    port,
+    database,
+    user,
+    password,
+    ssl: { rejectUnauthorized: false }, // ✅ OK pour Supabase (cert chain)
   });
 
-  // Matviews lourdes
-  const mvs = [
-    "stats_groupes_votes_legislature_mv",
-    "stats_groupes_par_loi_mv",
-    "mv_stats_groupes_par_loi",
-    // si tu veux plus tard :
-    // "votes_par_loi_mv",
-    // "deputes_top_activite",
-  ];
-
   try {
-    console.log("   DB =", redactConn(conn));
-    console.log(
-      `   SSL rejectUnauthorized = ${strictSsl ? "true (strict)" : "false (lenient)"}`
-    );
-
     await client.connect();
 
-    // côté Postgres : supprime les timeouts pour cette session
     await client.query("SET statement_timeout = 0;");
     await client.query("SET lock_timeout = 0;");
 
+    const mvs = [
+      "stats_groupes_votes_legislature_mv",
+      "stats_groupes_par_loi_mv",
+      "mv_stats_groupes_par_loi",
+    ];
+
     for (const mv of mvs) {
       console.log(`\n🔄 REFRESH MATERIALIZED VIEW ${mv}`);
-      // Comme la liste est hardcodée, pas besoin d’échappement dynamique ici.
       await client.query(`REFRESH MATERIALIZED VIEW ${mv};`);
       console.log(`✅ ${mv} → OK`);
     }
