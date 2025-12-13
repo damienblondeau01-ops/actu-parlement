@@ -11,7 +11,6 @@ const __dirname = path.dirname(__filename);
 
 // Robuste peu importe d'où on lance le script
 const ingestionDir = __dirname;
-const repoRoot = path.resolve(ingestionDir, "..");
 
 // ✅ charge ingestion/.env si présent (local). En CI il n'existe pas -> pas grave.
 const envPath = path.join(ingestionDir, ".env");
@@ -19,7 +18,7 @@ if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
   console.log("✅ .env chargé :", envPath);
 } else {
-  console.log("ℹ️ Pas de ingestion/.env (normal en GitHub Actions).");
+  console.log("ℹ️ Pas de ingestion/.env (normal en CI/GitHub Actions).");
 }
 
 const SUPABASE_URL =
@@ -45,7 +44,7 @@ function run(cmd, { cwd = ingestionDir } = {}) {
     execSync(cmd, {
       stdio: "inherit",
       cwd, // ✅ garantit les chemins relatifs
-      env: process.env,
+      env: process.env, // ✅ env courante (local ou CI)
     });
   } catch (e) {
     console.error("❌ Commande échouée :", cmd);
@@ -57,9 +56,7 @@ function run(cmd, { cwd = ingestionDir } = {}) {
 async function rpcOrThrow(fnName) {
   console.log(`\n🔄 ${fnName}()`);
   const { error } = await supabase.rpc(fnName);
-  if (error) {
-    throw new Error(`${fnName} → ${error.message}`);
-  }
+  if (error) throw new Error(`${fnName} → ${error.message}`);
   console.log(`✅ ${fnName} → OK`);
 }
 
@@ -78,14 +75,16 @@ async function main() {
   // 3) MV légère via RPC (utile pour l’accueil)
   await rpcOrThrow("refresh_mv_scrutins_recents");
 
-  // 4) MV lourdes via Postgres direct (1 seule fois, sans HTTP timeout)
-  //    -> nécessite SUPABASE_DB_URL (ou DATABASE_URL) dans ingestion/.env (local)
-  //    -> en GitHub Actions, tu la mets en secret
-  const heavyScript = path.join(ingestionDir, "refresh_heavy_mvs_pg.js");
-  if (fs.existsSync(heavyScript)) {
-    run("node refresh_heavy_mvs_pg.js");
+  // 4) MV lourdes via Postgres direct (local ok, CI souvent bloqué réseau)
+  const skipPg =
+    process.env.SKIP_PG_REFRESH === "1" ||
+    process.env.CI === "true" ||
+    process.env.GITHUB_ACTIONS === "true";
+
+  if (skipPg) {
+    console.log("ℹ️ CI: refresh_heavy_mvs_pg.js ignoré (SKIP_PG_REFRESH/CI).");
   } else {
-    console.log("ℹ️ Script PG direct absent, skip:", heavyScript);
+    run("node refresh_heavy_mvs_pg.js");
   }
 
   const seconds = Math.round((Date.now() - startedAt) / 1000);
@@ -96,3 +95,4 @@ main().catch((e) => {
   console.error("❌ Erreur fatale:", e?.message ?? e);
   process.exitCode = 1;
 });
+  
