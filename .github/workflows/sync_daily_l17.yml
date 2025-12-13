@@ -24,13 +24,21 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Debug versions
+        run: node -v && npm -v
+
+      - name: Install dependencies (root) (skip postinstall)
+        run: npm ci --ignore-scripts
+
+      - name: Install dependencies (ingestion)
+        run: |
+          cd ingestion
+          npm ci
 
       - name: Run daily sync L17
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          PG_SSL_REJECT_UNAUTHORIZED: "0"
+          NODE_TLS_REJECT_UNAUTHORIZED: "0"
         run: npm run sync:daily:l17
