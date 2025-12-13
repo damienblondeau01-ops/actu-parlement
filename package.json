@@ -1,20 +1,29 @@
 {
   "name": "actu-parlement",
   "version": "1.0.0",
+  "type": "module",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+
     "test": "jest",
     "lint": "eslint app lib --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
+
+    "postinstall": "expo-router install",
+
     "healthcheck": "node ingestion/healthcheck.js",
+
     "sync:scrutins": "node ingestion/sync_scrutins.js",
     "sync:deputes": "node ingestion/sync_deputes.js",
-    "ai:resumes": "node ingestion/generate_resumes_lois.js",
-    "sync:votes": "node ingestion/fetch_votes_from_opendata.js"
+
+    "sync:votes:l17": "node ingestion/votes/fetch_votes_from_opendata.js 17",
+    "sync:daily:l17": "node ingestion/sync_daily_17.js",
+
+    "ai:resumes": "node ingestion/generate_resumes_lois.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

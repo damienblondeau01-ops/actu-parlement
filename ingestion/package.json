@@ -3,14 +3,18 @@
   "version": "1.0.0",
   "main": "ingest_all.js",
   "scripts": {
-    "ingest:deputes": "node ingest_deputes.js",
-    "ingest:lois": "node ingest_lois.js",
+    "ingest:deputes": "node deputes/ingest_deputes.js",
+    "ingest:lois": "node lois/fetch_dossiers_legislatifs.js",
+    "ingest:scrutins": "node scrutins/fetch_scrutins_from_local_zip.js",
+    "ingest:votes": "node votes/fetch_votes_from_opendata.js 17",
+    "ingest:daily:17": "node sync_daily_17.js",
     "ingest:all": "node ingest_all.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.48.0",
     "csv-parse": "^6.1.0",
     "dotenv": "^16.4.0",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "pg": "^8.16.3"
   }
 }

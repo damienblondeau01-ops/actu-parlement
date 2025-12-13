@@ -2,14 +2,25 @@
 import { execSync } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ charge ingestion/.env
-dotenv.config({ path: path.join(__dirname, ".env") });
+// Robuste peu importe d'où on lance le script
+const ingestionDir = __dirname;
+const repoRoot = path.resolve(ingestionDir, "..");
+
+// ✅ charge ingestion/.env si présent (local). En CI il n'existe pas -> pas grave.
+const envPath = path.join(ingestionDir, ".env");
+if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath });
+  console.log("✅ .env chargé :", envPath);
+} else {
+  console.log("ℹ️ Pas de ingestion/.env (normal en GitHub Actions).");
+}
 
 const SUPABASE_URL =
   process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -18,9 +29,7 @@ const SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE;
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-  console.error(
-    "❌ SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY manquant dans ingestion/.env"
-  );
+  console.error("❌ ENV manquante : SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
   process.exitCode = 1;
   throw new Error("ENV manquante");
 }
@@ -30,15 +39,13 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 });
 
 // Exécute une commande Node et remonte une erreur lisible
-function run(cmd) {
+function run(cmd, { cwd = ingestionDir } = {}) {
   console.log("\n▶", cmd);
   try {
     execSync(cmd, {
       stdio: "inherit",
-      env: {
-        ...process.env,
-        DOTENV_CONFIG_PATH: path.join(__dirname, ".env"),
-      },
+      cwd, // ✅ garantit les chemins relatifs
+      env: process.env,
     });
   } catch (e) {
     console.error("❌ Commande échouée :", cmd);
@@ -47,43 +54,45 @@ function run(cmd) {
   }
 }
 
+async function rpcOrThrow(fnName) {
+  console.log(`\n🔄 ${fnName}()`);
+  const { error } = await supabase.rpc(fnName);
+  if (error) {
+    throw new Error(`${fnName} → ${error.message}`);
+  }
+  console.log(`✅ ${fnName} → OK`);
+}
+
 async function main() {
   const startedAt = Date.now();
   console.log("🕒 SYNC DAILY — 17e législature");
   console.log("   SUPABASE_URL =", SUPABASE_URL);
+  console.log("   cwd =", process.cwd());
 
   // 1) Téléchargement ZIP + import votes (L17)
-  run("node ingestion/votes/fetch_votes_from_opendata.js 17");
+  run("node votes/fetch_votes_from_opendata.js 17");
 
-  // 2) Import scrutins depuis le ZIP local (ingestion/data/Scrutins.json.zip)
-  run("node ingestion/scrutins/fetch_scrutins_from_local_zip.js");
+  // 2) Import scrutins depuis le ZIP local
+  run("node scrutins/fetch_scrutins_from_local_zip.js");
 
-  // 3) Refresh MV (découpé pour éviter timeout API)
-  console.log("\n🔄 refresh_mv_scrutins_recents()");
-  let r = await supabase.rpc("refresh_mv_scrutins_recents");
-  if (r.error) {
-    console.error("❌ Erreur refresh_mv_scrutins_recents :", r.error.message);
-    process.exitCode = 1;
-    return;
+  // 3) MV légère via RPC (utile pour l’accueil)
+  await rpcOrThrow("refresh_mv_scrutins_recents");
+
+  // 4) MV lourdes via Postgres direct (1 seule fois, sans HTTP timeout)
+  //    -> nécessite SUPABASE_DB_URL (ou DATABASE_URL) dans ingestion/.env (local)
+  //    -> en GitHub Actions, tu la mets en secret
+  const heavyScript = path.join(ingestionDir, "refresh_heavy_mvs_pg.js");
+  if (fs.existsSync(heavyScript)) {
+    run("node refresh_heavy_mvs_pg.js");
+  } else {
+    console.log("ℹ️ Script PG direct absent, skip:", heavyScript);
   }
 
-  console.log("\n🔄 refresh_mv_stats_groupes()");
-  r = await supabase.rpc("refresh_mv_stats_groupes");
-  if (r.error) {
-    console.error("❌ Erreur refresh_mv_stats_groupes :", r.error.message);
-    process.exitCode = 1;
-    return;
-  }
-
-  console.log("\n✅ Refresh daily OK (sans votes_par_loi_mv)");
+  const seconds = Math.round((Date.now() - startedAt) / 1000);
+  console.log(`\n✅ Sync daily 17 terminé (${seconds}s)`);
 }
 
-// ✅ Sortie propre (évite UV_HANDLE_CLOSING)
-main()
-  .catch((e) => {
-    console.error("❌ Erreur fatale:", e?.message ?? e);
-    process.exitCode = 1;
-  })
-  .finally(() => {
-    setTimeout(() => {}, 0);
-  });
+main().catch((e) => {
+  console.error("❌ Erreur fatale:", e?.message ?? e);
+  process.exitCode = 1;
+});
