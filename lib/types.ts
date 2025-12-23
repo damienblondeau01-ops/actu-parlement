@@ -89,3 +89,9 @@ export type VotesParScrutin = {
   nb_votes_exprimes: number
   
 };
+
+export type LoiAIIntro = {
+  title?: string;
+  summary: string;
+  confidence?: number;
+};

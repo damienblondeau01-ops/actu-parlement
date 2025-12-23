@@ -53,20 +53,6 @@ function TabsInner() {
           tabBarHideOnKeyboard: true,
         }}
       >
-        {/* Accueil = app/(tabs)/index.tsx */}
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: "Accueil",
-            tabBarIcon: ({ color, focused }) => (
-              <Ionicons
-                name={focused ? "home" : "home-outline"}
-                size={22}
-                color={color}
-              />
-            ),
-          }}
-        />
 
         {/* Lois = app/(tabs)/lois/index.tsx */}
         <Tabs.Screen
@@ -98,14 +84,15 @@ function TabsInner() {
           }}
         />
 
-        {/* Stats = app/(tabs)/stats/index.tsx */}
+        {/* Activité = app/(tabs)/activite/index.tsx */}
         <Tabs.Screen
-          name="stats"
+          name="activite"
           options={{
-            title: "Stats",
+            title: "Activité",
+            lazy: false,
             tabBarIcon: ({ color, focused }) => (
               <Ionicons
-                name={focused ? "stats-chart" : "stats-chart-outline"}
+                name={focused ? "flash" : "flash-outline"}
                 size={22}
                 color={color}
               />

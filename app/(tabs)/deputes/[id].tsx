@@ -1,12 +1,7 @@
 // app/(tabs)/deputes/[id].tsx
 
 import { useLocalSearchParams, useRouter } from "expo-router";
-import React, {
-  useEffect,
-  useState,
-  useMemo,
-  useCallback,
-} from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
   ActivityIndicator,
   ScrollView,
@@ -19,6 +14,24 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabaseClient";
 import { theme } from "../../../lib/theme";
 import { Image as ExpoImage } from "expo-image";
+import * as Haptics from "expo-haptics";
+import DeputeHero from "../../../components/depute/DeputeHero";
+import DeputeActivityTab from "@components/depute/DeputeActivityTab";
+import DeputeAboutTab from "../../../components/depute/DeputeAboutTab";
+import DataScopeBadge from "@components/ui/DataScopeBadge";
+import DeputeVotesTab from "@/components/depute/tabs/DeputeVotesTab";
+
+import {
+  summarizeRecentSignals,
+  computeDeltaHints,
+  phraseScore,
+  normalizeVoteKey,
+  voteLabel,
+  computeDTriplePlusNarrative,
+} from "../../../lib/political";
+
+
+type DataScope = "ANALYTICS_L16" | "RECENT_L17" | "MIXED";
 
 type DeputeRow = {
   id_an: string | null;
@@ -34,12 +47,14 @@ type DeputeRow = {
   age: number | string | null;
   job: string | null;
   profession: string | null;
+
   scoreParticipation: number | string | null;
   scoreLoyaute: number | string | null;
   scoreMajorite: number | string | null;
   scoreparticipation: number | string | null;
   scoreloyaute: number | string | null;
   scoremajorite: number | string | null;
+
   photoUrl: string | null;
   photourl: string | null;
   emoji: string | null;
@@ -61,6 +76,7 @@ type RecentVote = {
   vote: string | null;
   titre: string | null;
   resultat: string | null;
+  date_scrutin?: string | null;
 };
 
 type VoteBreakdown = {
@@ -72,10 +88,76 @@ type VoteBreakdown = {
 };
 
 type TabKey = "ABOUT" | "VOTES" | "ACTIVITY";
+type VoteKey = "pour" | "contre" | "abstention" | "nv";
+type TimeBucket = "TODAY" | "WEEK" | "OLDER";
+
+/* ---------------- Helpers robustes ---------------- */
+
+
+function computeSafeNumber(value: number | string | null): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") return value;
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatPct(value: number | null): string {
+  if (value === null || value === undefined) return "—";
+  return `${value.toFixed(1)} %`;
+}
+
+function qualifierScore(v: number | null): "high" | "mid" | "low" | "na" {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "na";
+  if (v >= 75) return "high";
+  if (v >= 50) return "mid";
+  return "low";
+}
+
+type SignalLevel = "ok" | "warn" | "info";
+
+function getSectionLabel(bucket: TimeBucket) {
+  if (bucket === "TODAY") return "Aujourd’hui";
+  if (bucket === "WEEK") return "Ces 7 derniers jours";
+  return "Plus ancien";
+}
+
+function parseDateSafe(s?: string | null): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function signalPillStyle(level: SignalLevel) {
+  if (level === "ok") return "ok";
+  if (level === "warn") return "warn";
+  return "info";
+}
+
+/** Mini barre de progression “premium” (sans lib) */
+function ProgressBar({ value }: { value: number | null }) {
+  const p = value === null ? null : Math.max(0, Math.min(100, value));
+  return (
+    <View style={styles.progressWrap}>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${p ?? 0}%` }]} />
+      </View>
+      <Text style={styles.progressText}>{formatPct(p)}</Text>
+    </View>
+  );
+}
 
 export default function DeputeDetailScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const router = useRouter();
+
+  // ✅ Fix TS: on “retype” DeputeHero ici (sans toucher au composant)
+  const DeputeHeroX = DeputeHero as unknown as React.ComponentType<{
+    depute: DeputeRow;
+    voteCount: number | null;
+    ctaLabel: string;
+    onPressPrimary: () => void;
+    showRecentHint?: boolean;
+  }>;
 
   const [depute, setDepute] = useState<DeputeRow | null>(null);
   const [scores, setScores] = useState<SafeScores>({
@@ -83,43 +165,15 @@ export default function DeputeDetailScreen() {
     loyaute: null,
     majorite: null,
   });
+
   const [activeTab, setActiveTab] = useState<TabKey>("ABOUT");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [totalVotesCount, setTotalVotesCount] = useState<number | null>(
-    null
-  );
+  const [totalVotesCount, setTotalVotesCount] = useState<number | null>(null);
   const [recentVotes, setRecentVotes] = useState<RecentVote[]>([]);
-  const [recentVotesLoading, setRecentVotesLoading] =
-    useState<boolean>(false);
-  const [voteBreakdown, setVoteBreakdown] =
-    useState<VoteBreakdown | null>(null);
-
-  const deputeName = useMemo(() => {
-    if (!depute) return "";
-    return (
-      depute.nomComplet ||
-      depute.nomcomplet ||
-      `${depute.prenom ?? ""} ${depute.nom ?? ""}`.trim()
-    );
-  }, [depute]);
-
-  const deputeInitials = useMemo(() => {
-    if (!deputeName) return "";
-    const parts = deputeName.split(" ").filter(Boolean);
-    if (parts.length >= 2) {
-      return `${parts[0][0] ?? ""}${
-        parts[parts.length - 1][0] ?? ""
-      }`.toUpperCase();
-    }
-    return deputeName.slice(0, 2).toUpperCase();
-  }, [deputeName]);
-
-  const photoUrl = useMemo(() => {
-    if (!depute) return null;
-    return depute.photoUrl || depute.photourl || null;
-  }, [depute]);
+  const [recentVotesLoading, setRecentVotesLoading] = useState<boolean>(false);
+  const [voteBreakdown, setVoteBreakdown] = useState<VoteBreakdown | null>(null);
 
   const circoLabel = useMemo(() => {
     if (!depute) return null;
@@ -132,27 +186,12 @@ export default function DeputeDetailScreen() {
     return null;
   }, [depute]);
 
-  const computeSafeNumber = (value: number | string | null): number | null => {
-    if (value === null || value === undefined) return null;
-    if (typeof value === "number") return value;
-    const parsed = Number(value);
-    return Number.isNaN(parsed) ? null : parsed;
-  };
-
-  const formatPct = (value: number | null): string => {
-    if (value === null || value === undefined) return "—";
-    return `${value.toFixed(1)} %`;
-  };
-
   const yearsExperience = useMemo(() => {
     if (!depute) return null;
-    if (
-      depute.experienceDepute !== null &&
-      depute.experienceDepute !== undefined
-    ) {
-      const num = computeSafeNumber(depute.experienceDepute);
-      if (num !== null) return num;
-    }
+
+    const exp = computeSafeNumber(depute.experienceDepute);
+    if (exp !== null) return exp;
+
     if (depute.datePriseFonction) {
       const start = new Date(depute.datePriseFonction);
       if (!Number.isNaN(start.getTime())) {
@@ -166,22 +205,16 @@ export default function DeputeDetailScreen() {
   }, [depute]);
 
   const mandatText = useMemo(() => {
-    if (!depute) {
-      return "Mandat en cours à l'Assemblée nationale.";
-    }
+    if (!depute) return "Mandat en cours à l'Assemblée nationale.";
 
     const legNum = computeSafeNumber(depute.legislature);
-    const legSuffix = legNum
-      ? `${legNum}ᵉ législature`
-      : "législature en cours";
+    const legSuffix = legNum ? `${legNum}ᵉ législature` : "législature en cours";
 
-    if (!depute.datePriseFonction) {
-      return `Mandat en cours durant la ${legSuffix}.`;
-    }
+    if (!depute.datePriseFonction) return `Mandat en cours durant la ${legSuffix}.`;
+
     const d = new Date(depute.datePriseFonction);
-    if (Number.isNaN(d.getTime())) {
-      return `Mandat en cours durant la ${legSuffix}.`;
-    }
+    if (Number.isNaN(d.getTime())) return `Mandat en cours durant la ${legSuffix}.`;
+
     return `Mandat en cours depuis le ${d.toLocaleDateString("fr-FR", {
       day: "2-digit",
       month: "long",
@@ -189,9 +222,94 @@ export default function DeputeDetailScreen() {
     })} (${legSuffix}).`;
   }, [depute]);
 
+  const lectureRapide = useMemo(() => {
+    const lignes: string[] = [];
+    lignes.push(phraseScore("participation", scores.participation));
+    lignes.push(phraseScore("loyaute", scores.loyaute));
+    lignes.push(phraseScore("majorite", scores.majorite));
+    if (totalVotesCount !== null) {
+      lignes.push(`Base : ${totalVotesCount} votes nominatifs disponibles pour ce député.`);
+    }
+    return lignes;
+  }, [scores.participation, scores.loyaute, scores.majorite, totalVotesCount]);
+
+  const dTriplePlus = useMemo(() => {
+    return computeDTriplePlusNarrative(scores, totalVotesCount);
+  }, [scores, totalVotesCount]);
+
+  const recentSignals = useMemo(() => summarizeRecentSignals(recentVotes), [recentVotes]);
+  const deltaHints = useMemo(() => computeDeltaHints(scores), [scores]);
+
+  // 🧭 Portée des données affichées sur cet écran
+const DATA_SCOPE = useMemo<DataScope>(() => {
+  const hasAnalytics =
+    scores.participation !== null || scores.loyaute !== null || scores.majorite !== null;
+
+  const hasRecent = recentVotes.length > 0;
+
+  if (hasAnalytics && hasRecent) return "MIXED";
+  if (hasAnalytics) return "ANALYTICS_L16";
+  if (hasRecent) return "RECENT_L17";
+  return "MIXED";
+}, [scores.participation, scores.loyaute, scores.majorite, recentVotes.length]);
+
+
+  const lectureDPlusPlus = useMemo(() => {
+    const markers = (recentVotes ?? []).slice(0, 3);
+
+    const last = recentVotes ?? [];
+    const counts: Record<VoteKey, number> = { pour: 0, contre: 0, abstention: 0, nv: 0 };
+    last.forEach((v) => {
+      const k = normalizeVoteKey(v.vote);
+      counts[k] += 1;
+    });
+
+    const n = last.length || 0;
+
+    const mainTendency: VoteKey =
+      counts.pour >= counts.contre && counts.pour >= counts.abstention && counts.pour >= counts.nv
+        ? "pour"
+        : counts.contre >= counts.abstention && counts.contre >= counts.nv
+        ? "contre"
+        : counts.abstention >= counts.nv
+        ? "abstention"
+        : "nv";
+
+    const dominant = Math.max(counts.pour, counts.contre, counts.abstention, counts.nv);
+    const consistency =
+      n >= 4 && dominant / n >= 0.67
+        ? "très stable"
+        : n >= 4 && dominant / n >= 0.5
+        ? "plutôt stable"
+        : "variable";
+
+    const participationHint =
+      counts.nv >= 3 ? "Présence irrégulière sur cette courte période." : "Présence correcte sur cette courte période.";
+
+    const summary = [
+      n > 0
+        ? `Sur les ${n} derniers votes observés, tendance dominante : ${voteLabel(mainTendency).toLowerCase()} (${dominant}/${n}).`
+        : "Historique récent insuffisant pour produire une synthèse.",
+      `Comportement : ${consistency}.`,
+      participationHint,
+    ];
+
+    return { markers, counts, summary };
+  }, [recentVotes]);
+
+  // ✅ CTA qui change selon l’onglet
+  const heroCta = useMemo(() => {
+    if (activeTab === "ABOUT") {
+      return { label: "Voir ses votes", onPress: () => setActiveTab("VOTES") };
+    }
+    if (activeTab === "VOTES") {
+      return { label: "Analyser son activité", onPress: () => setActiveTab("ACTIVITY") };
+    }
+    return { label: "Voir son profil", onPress: () => setActiveTab("ABOUT") };
+  }, [activeTab]);
+
   const loadDepute = useCallback(async () => {
     if (!id) {
-      console.log("[DEPUTE SCREEN] param id manquant");
       setError("Aucun ID de député fourni.");
       setDepute(null);
       setLoading(false);
@@ -254,18 +372,15 @@ export default function DeputeDetailScreen() {
       const row = data as DeputeRow;
       setDepute(row);
 
-      const participationRaw =
-        row.scoreParticipation ?? row.scoreparticipation ?? null;
+      const participationRaw = row.scoreParticipation ?? row.scoreparticipation ?? null;
       const loyauteRaw = row.scoreLoyaute ?? row.scoreloyaute ?? null;
       const majoriteRaw = row.scoreMajorite ?? row.scoremajorite ?? null;
 
-      const safeScores: SafeScores = {
+      setScores({
         participation: computeSafeNumber(participationRaw),
         loyaute: computeSafeNumber(loyauteRaw),
         majorite: computeSafeNumber(majoriteRaw),
-      };
-
-      setScores(safeScores);
+      });
     } catch (e) {
       console.warn("[DEPUTE SCREEN] Erreur inattendue =", e);
       setError("Erreur inattendue lors du chargement du député.");
@@ -283,10 +398,7 @@ export default function DeputeDetailScreen() {
         .eq("id_depute", deputeId);
 
       if (error) {
-        console.warn(
-          "[DEPUTE SCREEN] Erreur chargement stats rapides =",
-          error
-        );
+        console.warn("[DEPUTE SCREEN] Erreur stats rapides =", error);
         return;
       }
 
@@ -301,74 +413,63 @@ export default function DeputeDetailScreen() {
       setRecentVotesLoading(true);
       setRecentVotes([]);
 
-      // 1️⃣ On récupère les 5 derniers votes du député via la vue votes_deputes_detail
       const { data: votes, error: votesError } = await supabase
         .from("votes_deputes_detail")
-        .select("numero_scrutin, vote")
+        .select("numero_scrutin, vote, position")
         .eq("id_depute", deputeId)
         .order("numero_scrutin", { ascending: false })
-        .limit(5);
+        .limit(6);
 
       if (votesError) {
-        console.warn(
-          "[DEPUTE SCREEN] Erreur chargement votes récents =",
-          votesError
-        );
+        console.warn("[DEPUTE SCREEN] Erreur votes récents =", votesError);
         return;
       }
 
-      if (!votes || votes.length === 0) {
-        return;
-      }
+      if (!votes || votes.length === 0) return;
 
-      // 2️⃣ On regarde les scrutins correspondants dans scrutins_data
       const numeros = votes
-        .map((v: any) => v.numero_scrutin as string | null)
+        .map((v: any) => (v.numero_scrutin ? String(v.numero_scrutin) : null))
         .filter((v): v is string => !!v);
 
-      if (numeros.length === 0) {
-        return;
-      }
+      if (numeros.length === 0) return;
 
       const { data: scrutins, error: scrutinsError } = await supabase
         .from("scrutins_data")
-        .select("numero, titre, resultat")
+        .select("numero, titre, resultat, date_scrutin")
         .in("numero", numeros);
 
       if (scrutinsError) {
-        console.warn(
-          "[DEPUTE SCREEN] Erreur chargement scrutins récents =",
-          scrutinsError
-        );
+        console.warn("[DEPUTE SCREEN] Erreur scrutins récents =", scrutinsError);
         return;
       }
 
       const scrutinsByNumero =
-        scrutins?.reduce<
-          Record<string, { titre: string | null; resultat: string | null }>
-        >((acc: any, s: any) => {
-          if (s.numero !== null && s.numero !== undefined) {
-            const key = String(s.numero);
-            acc[key] = {
-              titre: s.titre ?? null,
-              resultat: s.resultat ?? null,
-            };
-          }
-          return acc;
-        }, {}) ?? {};
+        scrutins?.reduce<Record<string, { titre: string | null; resultat: string | null; date_scrutin: string | null }>>(
+          (acc: any, s: any) => {
+            if (s.numero !== null && s.numero !== undefined) {
+              const key = String(s.numero);
+              acc[key] = {
+                titre: s.titre ?? null,
+                resultat: s.resultat ?? null,
+                date_scrutin: (s as any).date_scrutin ?? null,
+              };
+            }
+            return acc;
+          },
+          {}
+        ) ?? {};
 
-      // 3️⃣ Merge votes + infos scrutins
       const merged: RecentVote[] = (votes as any[]).map((v) => {
         const key = String(v.numero_scrutin);
-        const info = scrutinsByNumero[key] ?? {
-          titre: null,
-          resultat: null,
-        };
+        const info = scrutinsByNumero[key] ?? { titre: null, resultat: null, date_scrutin: null };
+        const rawVote = (v.vote ?? v.position ?? null) as string | null;
+
         return {
           numero_scrutin: key,
-          vote: v.vote ?? null,
+          vote: rawVote,
           titre: info.titre,
           resultat: info.resultat,
+          date_scrutin: info.date_scrutin,
         };
       });
 
@@ -388,10 +489,7 @@ export default function DeputeDetailScreen() {
         .eq("id_depute", deputeId);
 
       if (error) {
-        console.warn(
-          "[DEPUTE SCREEN] Erreur chargement répartition votes =",
-          error
-        );
+        console.warn("[DEPUTE SCREEN] Erreur breakdown votes =", error);
         return;
       }
 
@@ -401,28 +499,17 @@ export default function DeputeDetailScreen() {
       let nv = 0;
 
       (data ?? []).forEach((row: any) => {
-        const raw = (
-          row.position ?? row.vote ?? ""
-        ).toString().toLowerCase();
-
-        if (raw.includes("pour")) {
-          pour += 1;
-        } else if (raw.includes("contre")) {
-          contre += 1;
-        } else if (raw.includes("abst")) {
-          abstention += 1;
-        } else {
-          nv += 1;
-        }
+        const k = normalizeVoteKey(row.position ?? row.vote ?? null);
+        if (k === "pour") pour += 1;
+        else if (k === "contre") contre += 1;
+        else if (k === "abstention") abstention += 1;
+        else nv += 1;
       });
 
       const total = pour + contre + abstention + nv;
       setVoteBreakdown({ pour, contre, abstention, nv, total });
     } catch (e) {
-      console.warn(
-        "[DEPUTE SCREEN] Erreur inattendue répartition votes =",
-        e
-      );
+      console.warn("[DEPUTE SCREEN] Erreur inattendue breakdown =", e);
     }
   }, []);
 
@@ -432,29 +519,63 @@ export default function DeputeDetailScreen() {
 
   useEffect(() => {
     if (id) {
-      // id = id_an du député (ex: PA123456)
       loadQuickStats(id);
       loadRecentVotes(id);
       loadVoteBreakdown(id);
     }
   }, [id, loadQuickStats, loadRecentVotes, loadVoteBreakdown]);
 
+  const onTabPress = (key: TabKey) => {
+    try {
+      Haptics.selectionAsync();
+    } catch {}
+    setActiveTab(key);
+  };
+
   const renderTabButton = (key: TabKey, label: string) => {
     const active = activeTab === key;
     return (
       <Pressable
-        onPress={() => setActiveTab(key)}
-        style={[styles.tabItem, active && styles.tabItemActive]}
+        onPress={() => onTabPress(key)}
+        style={({ pressed }) => [
+          styles.tabItem,
+          active && styles.tabItemActive,
+          pressed && { opacity: 0.92 },
+        ]}
       >
-        <Text
-          style={[styles.tabLabel, active && styles.tabLabelActive]}
-          numberOfLines={1}
-        >
+        <Text style={[styles.tabLabel, active && styles.tabLabelActive]} numberOfLines={1}>
           {label}
         </Text>
       </Pressable>
     );
   };
+  
+  const timelineSections = useMemo<Record<TimeBucket, RecentVote[]>>(() => {
+    const base: Record<TimeBucket, RecentVote[]> = { TODAY: [], WEEK: [], OLDER: [] };
+    if (!recentVotes || recentVotes.length === 0) return base;
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekAgo = new Date(startOfToday);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+
+    recentVotes.forEach((v, idx) => {
+      const d = parseDateSafe(v.date_scrutin);
+
+      if (d) {
+        if (d >= startOfToday) base.TODAY.push(v);
+        else if (d >= weekAgo) base.WEEK.push(v);
+        else base.OLDER.push(v);
+        return;
+      }
+
+      if (idx <= 1) base.TODAY.push(v);
+      else if (idx <= 4) base.WEEK.push(v);
+      else base.OLDER.push(v);
+    });
+
+    return base;
+  }, [recentVotes]);
 
   if (loading) {
     return (
@@ -489,368 +610,130 @@ export default function DeputeDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* 🔹 HEADER FIXE : image, avatar, nom/parti, onglets */}
+      {/* HEADER FIXE */}
       <View style={styles.headerFixed}>
-        <View style={styles.headerContainer}>
-          <View style={styles.bannerWrapper}>
-            <ExpoImage
-              source={require("../../../assets/header/assemblee.jpg")}
-              style={styles.bannerImage}
-              contentFit="cover"
-            />
-            <View style={styles.bannerOverlay} />
+        <View style={styles.bannerWrapper}>
+          <ExpoImage
+            source={require("../../../assets/header/assemblee.jpg")}
+            style={styles.bannerImage}
+            contentFit="cover"
+          />
+          <View style={styles.bannerOverlay} />
 
-            {/* Bouton retour flottant */}
-            <View style={styles.headerTopBar}>
-              <Pressable
-                onPress={() => router.back()}
-                style={styles.backCircle}
-              >
-                <Text style={styles.backCircleIcon}>←</Text>
-              </Pressable>
-            </View>
-          </View>
-
-          {/* Avatar centré */}
-          <View style={styles.avatarOuter}>
-            <View style={styles.avatarInner}>
-              {photoUrl ? (
-                <ExpoImage
-                  source={{ uri: photoUrl }}
-                  style={styles.avatarImage}
-                  contentFit="cover"
-                />
-              ) : (
-                <View style={styles.avatarFallback}>
-                  <Text style={styles.avatarInitials}>{deputeInitials}</Text>
-                </View>
-              )}
-            </View>
-          </View>
-
-          {/* Carte identité compacte */}
-          <View style={styles.headerCard}>
-            <Text style={styles.nameText} numberOfLines={2}>
-              {depute.emoji ? `${depute.emoji} ${deputeName}` : deputeName}
-            </Text>
-
-            {depute.groupe && (
-              <View style={styles.chipRow}>
-                <View style={styles.chip}>
-                  <Text style={styles.chipText}>
-                    {depute.groupeAbrev
-                      ? `${depute.groupe} (${depute.groupeAbrev})`
-                      : depute.groupe}
-                  </Text>
-                </View>
-              </View>
-            )}
+          <View style={styles.headerTopBar}>
+            <Pressable onPress={() => router.back()} style={styles.backCircle}>
+              <Text style={styles.backCircleIcon}>←</Text>
+            </Pressable>
           </View>
         </View>
 
-        {/* Onglets fixés sous l'encart */}
         <View style={styles.tabsHeaderCard}>
           <View style={styles.tabsWrapper}>
             {renderTabButton("ABOUT", "À propos")}
-            {renderTabButton("VOTES", "Votes clés")}
+            {renderTabButton("VOTES", "Votes")}
             {renderTabButton("ACTIVITY", "Activité")}
           </View>
         </View>
       </View>
 
-      {/* 🔹 CONTENU SCROLLABLE : uniquement le contenu des onglets */}
+      {/* CONTENU SCROLLABLE */}
       <ScrollView
         style={styles.contentScroll}
         contentContainerStyle={styles.contentScrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {activeTab === "ABOUT" && (
-          <View style={styles.tabCard}>
-            <Text style={styles.sectionTitle}>À propos du député</Text>
-            {depute.resume ? (
-              <Text style={styles.paragraph}>{depute.resume}</Text>
-            ) : depute.bio ? (
-              <Text style={styles.paragraph}>{depute.bio}</Text>
-            ) : (
-              <Text style={styles.paragraphSecondary}>
-                Ce député exerce son mandat à l&apos;Assemblée nationale et
-                siège au sein de son groupe politique. Les informations
-                détaillées sur son parcours et ses centres d&apos;intérêt
-                seront prochainement disponibles.
-              </Text>
-            )}
+        <View style={styles.heroOverlap}>
+          <DeputeHeroX
+            depute={depute}
+            voteCount={totalVotesCount}
+            ctaLabel={heroCta.label}
+            onPressPrimary={heroCta.onPress}
+            showRecentHint={activeTab === "ACTIVITY"} // ✅ seulement Activity
+          />
+        </View>
 
-            <View style={styles.aboutInfoCard}>
-              {depute.age && (
-                <View style={styles.aboutInfoRow}>
-                  <Text style={styles.aboutInfoLabel}>Âge</Text>
-                  <Text style={styles.aboutInfoValue}>{depute.age} ans</Text>
-                </View>
-              )}
-              {depute.profession && (
-                <View style={styles.aboutInfoRow}>
-                  <Text style={styles.aboutInfoLabel}>Profession</Text>
-                  <Text style={styles.aboutInfoValue}>
-                    {depute.profession}
-                  </Text>
-                </View>
-              )}
-              {(circoLabel ||
-                depute.departementNom ||
-                depute.departementCode) && (
-                <View style={styles.aboutInfoRow}>
-                  <Text style={styles.aboutInfoLabel}>Circonscription</Text>
-                  <Text style={styles.aboutInfoValue}>
-                    {circoLabel ??
-                      `${depute.departementNom ?? ""}${
-                        depute.departementCode
-                          ? ` (${depute.departementCode})`
-                          : ""
-                      }`.trim()}
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-        )}
+        {/* ABOUT */}
+        {activeTab === "ABOUT" && (
+  <DeputeAboutTab
+    depute={depute}
+    circoLabel={circoLabel}
+    styles={styles}
+  />
+)}
+
 
         {activeTab === "VOTES" && (
-          <View style={styles.tabCard}>
-            <Text style={styles.sectionTitle}>Votes clés du député</Text>
-            <View style={styles.statCard}>
-              <Text style={styles.paragraph}>
-                Retrouvez ici une sélection de scrutins marquants montrant les
-                prises de position du député :
-              </Text>
-              <Text style={styles.paragraphSecondary}>
-                • Votes sur les projets de loi majeurs{"\n"}
-                • Amendements importants{"\n"}
-                • Scrutins publics engageant la responsabilité du
-                gouvernement{"\n"}
-                • Votes où le député se distingue de son groupe politique
-              </Text>
-              <Text style={[styles.paragraphSecondary, { marginTop: 6 }]}>
-                Les votes clés sont générés automatiquement à partir des
-                données officielles OpenData.
-              </Text>
-            </View>
+  <View style={styles.tabCard}>
+    <Text style={styles.sectionTitle}>Votes</Text>
 
-            <View style={styles.recentVotesSection}>
-              <Text style={styles.subSectionTitle}>Derniers votes</Text>
-              {recentVotesLoading && (
-                <Text style={styles.paragraphSecondary}>
-                  Chargement des derniers votes…
-                </Text>
-              )}
-              {!recentVotesLoading && recentVotes.length === 0 && (
-                <Text style={styles.paragraphSecondary}>
-                  Les derniers votes de ce député seront bientôt disponibles.
-                </Text>
-              )}
-              {!recentVotesLoading &&
-                recentVotes.map((vote) => {
-                  const voteLabel =
-                    vote.vote === "pour"
-                      ? "Pour"
-                      : vote.vote === "contre"
-                      ? "Contre"
-                      : vote.vote === "abstention"
-                      ? "Abstention"
-                      : vote.vote === "nv"
-                      ? "Non votant"
-                      : vote.vote ?? "—";
+    <DataScopeBadge scope={DATA_SCOPE} style={{ marginBottom: 10 }} />
 
-                  let pillBackground: string =
-                    theme.colors.surface || "#020617";
-                  if (vote.vote === "pour") {
-                    pillBackground = "rgba(34,197,94,0.16)";
-                  } else if (vote.vote === "contre") {
-                    pillBackground = "rgba(239,68,68,0.16)";
-                  } else if (vote.vote === "abstention") {
-                    pillBackground = "rgba(234,179,8,0.16)";
-                  }
+    <DeputeVotesTab
+      recentVotesLoading={recentVotesLoading}
+      timelineSections={timelineSections}
+      voteLabel={voteLabel}
+      normalizeVoteKey={normalizeVoteKey}
+      sectionLabel={getSectionLabel}
+      router={router}
+      styles={styles}
+    />
+  </View>
+)}
 
-                  return (
-                    <Pressable
-                      key={vote.numero_scrutin}
-                      style={styles.recentVoteCard}
-                      onPress={() =>
-                        router.push(`/scrutins/${vote.numero_scrutin}`)
-                      }
-                    >
-                      <Text
-                        style={styles.recentVoteTitle}
-                        numberOfLines={2}
-                      >
-                        {vote.titre ||
-                          `Scrutin n°${vote.numero_scrutin}`}
-                      </Text>
-                      <View style={styles.recentVoteMetaRow}>
-                        <View
-                          style={[
-                            styles.votePill,
-                            { backgroundColor: pillBackground },
-                          ]}
-                        >
-                          <Text style={styles.votePillText}>{voteLabel}</Text>
-                        </View>
-                        {vote.resultat && (
-                          <Text style={styles.recentVoteResultText}>
-                            Résultat : {vote.resultat}
-                          </Text>
-                        )}
-                      </View>
-                    </Pressable>
-                  );
-                })}
-            </View>
-          </View>
-        )}
 
+        {/* ACTIVITY */}
         {activeTab === "ACTIVITY" && (
-          <View style={styles.tabCard}>
-            <Text style={styles.sectionTitle}>Activité parlementaire</Text>
-            <View style={styles.statsRow}>
-              <View style={styles.statCardLarge}>
-                <Text style={styles.statLabel}>Participation</Text>
-                <Text style={styles.statValue}>
-                  {formatPct(scores.participation)}
-                </Text>
-              </View>
-              <View style={styles.statCardLarge}>
-                <Text style={styles.statLabel}>Loyauté envers son groupe</Text>
-                <Text style={styles.statValue}>
-                  {formatPct(scores.loyaute)}
-                </Text>
-              </View>
-              <View style={styles.statCardLarge}>
-                <Text style={styles.statLabel}>
-                  Alignement avec la majorité
-                </Text>
-                <Text style={styles.statValue}>
-                  {formatPct(scores.majorite)}
-                </Text>
-              </View>
-            </View>
+  <View style={styles.tabCard}>
+    <Text style={styles.sectionTitle}>Activité</Text>
 
-            <View style={styles.quickContextCard}>
-              <View style={styles.quickContextRow}>
-                <View style={styles.quickContextItem}>
-                  <Text style={styles.quickContextLabel}>
-                    Scrutins votés
-                  </Text>
-                  <Text style={styles.quickContextValue}>
-                    {totalVotesCount !== null ? totalVotesCount : "—"}
-                  </Text>
-                </View>
-                <View style={styles.quickContextItem}>
-                  <Text style={styles.quickContextLabel}>Lois suivies</Text>
-                  <Text style={styles.quickContextValue}>—</Text>
-                </View>
-                <View style={styles.quickContextItem}>
-                  <Text style={styles.quickContextLabel}>Expérience</Text>
-                  <Text style={styles.quickContextValue}>
-                    {yearsExperience !== null
-                      ? `${yearsExperience} ans`
-                      : "—"}
-                  </Text>
-                </View>
-              </View>
-            </View>
+    <DataScopeBadge scope={DATA_SCOPE} style={{ marginBottom: 10 }} />
 
-            {voteBreakdown && (
-              <View style={[styles.quickContextCard, { marginTop: 8 }]}>
-                <Text style={styles.timelineTitle}>
-                  Répartition des votes
-                </Text>
-                <View style={styles.voteDistRow}>
-                  <View style={styles.voteDistItem}>
-                    <Text style={styles.voteDistLabel}>Pour</Text>
-                    <Text style={styles.voteDistValue}>
-                      {voteBreakdown.pour}
-                    </Text>
-                  </View>
-                  <View style={styles.voteDistItem}>
-                    <Text style={styles.voteDistLabel}>Contre</Text>
-                    <Text style={styles.voteDistValue}>
-                      {voteBreakdown.contre}
-                    </Text>
-                  </View>
-                  <View style={styles.voteDistItem}>
-                    <Text style={styles.voteDistLabel}>Abstention</Text>
-                    <Text style={styles.voteDistValue}>
-                      {voteBreakdown.abstention}
-                    </Text>
-                  </View>
-                  <View style={styles.voteDistItem}>
-                    <Text style={styles.voteDistLabel}>Non votant</Text>
-                    <Text style={styles.voteDistValue}>
-                      {voteBreakdown.nv}
-                    </Text>
-                  </View>
-                </View>
-                {voteBreakdown.total > 0 && (
-                  <Text style={styles.paragraphSecondary}>
-                    Total : {voteBreakdown.total} votes nominatifs
-                    recensés pour ce député.
-                  </Text>
-                )}
-              </View>
-            )}
-
-            <View style={styles.timelineContainer}>
-              <Text style={styles.timelineTitle}>Timeline du mandat</Text>
-              <Text style={styles.timelineText}>{mandatText}</Text>
-            </View>
-
-            <View style={{ marginTop: 8 }}>
-              <Text style={styles.paragraphSecondary}>
-                Participation : pourcentage de scrutins auxquels le député a
-                pris part. Basé sur les votes nominatifs de la 16ᵉ législature.
-              </Text>
-              <Text style={styles.paragraphSecondary}>
-                Loyauté : part des votes où le député a voté en accord avec son
-                groupe politique.
-              </Text>
-              <Text style={styles.paragraphSecondary}>
-                Alignement avec la majorité : part des votes où sa position
-                correspond à celle de la majorité gouvernementale.
-              </Text>
-              <Text style={[styles.paragraphSecondary, { marginTop: 6 }]}>
-                🗳️ Données issues des votes nominatifs de la 16ᵉ législature
-                (OpenData AN).
-              </Text>
-            </View>
+    <DeputeActivityTab
+  scores={scores}
+  totalVotesCount={totalVotesCount}
+  yearsExperience={yearsExperience}
+  mandatText={mandatText}
+  lectureRapide={lectureRapide}
+  dTriplePlus={dTriplePlus}
+  recentSignals={recentSignals}
+  deltaHints={deltaHints}
+  lectureDPlusPlus={lectureDPlusPlus}
+  voteLabel={voteLabel}
+  normalizeVoteKey={normalizeVoteKey}
+  signalPillStyle={signalPillStyle}
+  ProgressBar={ProgressBar}
+  router={router}
+  styles={styles}
+            />
           </View>
         )}
 
-        {/* Footer dans la zone scrollable */}
+
         <View style={styles.footerNoteContainer}>
           <Text style={styles.footerNote}>
-            Données officielles — Assemblée nationale OpenData.
-          </Text>
+  {DATA_SCOPE === "ANALYTICS_L16" &&
+    "Analyse basée sur les votes de la 16ᵉ législature — données officielles AN."}
+
+  {DATA_SCOPE === "RECENT_L17" &&
+    "Votes récents issus de la 17ᵉ législature — données officielles AN."}
+
+  {DATA_SCOPE === "MIXED" &&
+    "Analyse basée sur la 16ᵉ législature, complétée par des votes récents de la 17ᵉ — données officielles AN."}
+</Text>
+
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
+  container: { flex: 1, backgroundColor: theme.colors.background },
 
-  // Partie scrollable (contenu sous les onglets)
-  contentScroll: {
-    flex: 1,
-  },
-  contentScrollContent: {
-    paddingTop: 8,
-    paddingBottom: 100,
-  },
+  contentScroll: { flex: 1 },
+  contentScrollContent: { paddingTop: 6, paddingBottom: 100 },
 
-  // Centre / états
+  heroOverlap: { marginTop: -18 },
+
   center: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -858,10 +741,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 16,
   },
-  loadingText: {
-    marginTop: 8,
-    color: theme.colors.subtext,
-  },
+  loadingText: { marginTop: 8, color: theme.colors.subtext },
   errorText: {
     color: theme.colors.danger || "red",
     textAlign: "center",
@@ -875,16 +755,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: theme.colors.card,
   },
-  backButtonText: {
-    color: theme.colors.text,
-    fontWeight: "600",
-  },
+  backButtonText: { color: theme.colors.text, fontWeight: "600" },
 
-  // 🔹 HEADER FIXE
   headerFixed: {},
-  headerContainer: {
-    marginBottom: 0,
-  },
   bannerWrapper: {
     height: 110,
     backgroundColor: "#111827",
@@ -892,13 +765,10 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 24,
     overflow: "hidden",
   },
-  bannerImage: {
-    width: "100%",
-    height: "100%",
-  },
+  bannerImage: { width: "100%", height: "100%" },
   bannerOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15,23,42,0.30)",
+    backgroundColor: "rgba(15,23,42,0.42)",
   },
   headerTopBar: {
     position: "absolute",
@@ -917,97 +787,30 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  backCircleIcon: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-  },
+  backCircleIcon: { color: "#fff", fontSize: 18, fontWeight: "600" },
 
-  // Avatar centré, un peu d'air avant le nom
-  avatarOuter: {
-    position: "absolute",
-    top: 110 - 42,
-    left: "50%",
-    marginLeft: -42,
-  },
-  avatarInner: {
-    width: 84,
-    height: 84,
-    borderRadius: 999,
-    borderWidth: 3,
-    borderColor: theme.colors.background,
-    overflow: "hidden",
-    backgroundColor: theme.colors.card,
-    shadowColor: "#000",
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
-  },
-  avatarImage: {
-    width: "100%",
-    height: "100%",
-  },
-  avatarFallback: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.primarySoft || "rgba(79,70,229,0.16)",
-  },
-  avatarInitials: {
-    color: theme.colors.primary,
-    fontWeight: "700",
-    fontSize: 24,
-  },
-
-  headerCard: {
-    marginTop: 54,
-    marginHorizontal: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 16,
-    backgroundColor: theme.colors.card,
-    shadowColor: "#000",
-    shadowOpacity: 0.16,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  nameText: {
-    fontSize: 19,
-    fontWeight: "700",
-    color: theme.colors.text,
-  },
-  chipRow: {
-    flexDirection: "row",
-    marginTop: 6,
-  },
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: theme.colors.primarySoft || "rgba(79,70,229,0.16)",
-  },
-  chipText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: theme.colors.primary,
-  },
-
-  // Onglets fixés
   tabsHeaderCard: {
     marginTop: 8,
     marginHorizontal: 16,
-    marginBottom: 4,
-    borderRadius: 20,
+    marginBottom: 6,
+    borderRadius: 22,
     backgroundColor: theme.colors.card,
-    padding: 6,
+    padding: 7,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   tabsWrapper: {
     flexDirection: "row",
     borderRadius: 999,
     backgroundColor: theme.colors.surface || "#020617",
-    padding: 3,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.05)",
   },
   tabItem: {
     flex: 1,
@@ -1019,72 +822,35 @@ const styles = StyleSheet.create({
   tabItemActive: {
     backgroundColor: theme.colors.primarySoft || "rgba(79,70,229,0.16)",
   },
-  tabLabel: {
-    fontSize: 13,
-    color: theme.colors.subtext,
-    fontWeight: "500",
-  },
-  tabLabelActive: {
-    color: theme.colors.primary,
-    fontWeight: "700",
-  },
+  tabLabel: { fontSize: 13, color: theme.colors.subtext, fontWeight: "500" },
+  tabLabelActive: { color: theme.colors.primary, fontWeight: "700" },
 
-  // 🔹 Cartes de contenu (dans la zone scrollable)
   tabCard: {
     marginHorizontal: 16,
     marginBottom: 12,
-    borderRadius: 20,
+    borderRadius: 22,
     backgroundColor: theme.colors.card,
-    padding: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
   },
+
   sectionTitle: {
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "800",
     color: theme.colors.text,
-    marginBottom: 6,
+    marginBottom: 8,
+    letterSpacing: 0.2,
   },
   subSectionTitle: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
     color: theme.colors.text,
-    marginBottom: 4,
-  },
-
-  statsRow: {
-    flexDirection: "row",
-    gap: 6,
     marginBottom: 6,
-  },
-  statCard: {
-    flex: 1,
-    borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    backgroundColor: theme.colors.card,
-  },
-  statCardLarge: {
-    flex: 1,
-    borderRadius: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    backgroundColor: theme.colors.surface || "#020617",
-  },
-  statLabel: {
-    fontSize: 11,
-    color: theme.colors.subtext,
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: theme.colors.text,
+    letterSpacing: 0.15,
   },
 
-  paragraph: {
-    fontSize: 14,
-    color: theme.colors.text,
-    lineHeight: 20,
-  },
+  paragraph: { fontSize: 14, color: theme.colors.text, lineHeight: 20 },
   paragraphSecondary: {
     marginTop: 4,
     fontSize: 13,
@@ -1092,7 +858,6 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
 
-  // Bloc infos "À propos"
   aboutInfoCard: {
     marginTop: 10,
     borderRadius: 12,
@@ -1105,10 +870,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 4,
   },
-  aboutInfoLabel: {
-    fontSize: 12,
-    color: theme.colors.subtext,
-  },
+  aboutInfoLabel: { fontSize: 12, color: theme.colors.subtext },
   aboutInfoValue: {
     fontSize: 13,
     color: theme.colors.text,
@@ -1117,52 +879,21 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
 
-  // Timeline
-  timelineContainer: {
-    marginTop: 8,
-    padding: 8,
+  statCard: {
+    marginTop: 6,
     borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     backgroundColor: theme.colors.surface || "#020617",
   },
-  timelineTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: theme.colors.text,
-    marginBottom: 4,
-  },
-  timelineText: {
-    fontSize: 13,
-    color: theme.colors.subtext,
-  },
 
-  // Contexte rapide dans Activité
-  quickContextCard: {
-    marginTop: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+  voteDistCard: {
+    marginTop: 6,
     borderRadius: 12,
-    backgroundColor: theme.colors.card,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.surface || "#020617",
   },
-  quickContextRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 8,
-  },
-  quickContextItem: {
-    flex: 1,
-  },
-  quickContextLabel: {
-    fontSize: 11,
-    color: theme.colors.subtext,
-    marginBottom: 2,
-  },
-  quickContextValue: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: theme.colors.text,
-  },
-
-  // Répartition des votes
   voteDistRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1170,69 +901,537 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     gap: 8,
   },
-  voteDistItem: {
-    flex: 1,
-    paddingVertical: 4,
-  },
-  voteDistLabel: {
-    fontSize: 11,
-    color: theme.colors.subtext,
-    marginBottom: 2,
-  },
-  voteDistValue: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: theme.colors.text,
-  },
+  voteDistItem: { flex: 1, paddingVertical: 4 },
+  voteDistLabel: { fontSize: 11, color: theme.colors.subtext, marginBottom: 2 },
+  voteDistValue: { fontSize: 14, fontWeight: "700", color: theme.colors.text },
+  voteDistPct: { fontSize: 12, fontWeight: "700", color: theme.colors.subtext },
 
-  // Derniers votes
-  recentVotesSection: {
-    marginTop: 10,
+  timelineVotesSection: { marginTop: 10 },
+  timelineHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    gap: 10,
   },
-  recentVoteCard: {
+  timelineHint: { color: theme.colors.subtext, fontSize: 11, fontWeight: "600" },
+  timelineList: { marginTop: 8, gap: 10 },
+  timelineItem: { flexDirection: "row", gap: 12 },
+  timelineRail: { width: 18, alignItems: "center" },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.25)",
+    backgroundColor: "rgba(148,163,184,0.65)",
+  },
+  timelineLine: {
+    flex: 1,
+    width: 2,
     marginTop: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.10)",
+  },
+  timelineCard: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  timelineTitleVote: {
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  timelineMetaRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  timelineMetaLeft: { color: theme.colors.subtext, fontSize: 11, fontWeight: "600" },
+  timelineMetaRight: { color: theme.colors.subtext, fontSize: 11, fontWeight: "800", opacity: 0.95 },
+
+  scoreCard: {
+    marginTop: 6,
     borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     backgroundColor: theme.colors.surface || "#020617",
   },
-  recentVoteTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: theme.colors.text,
-    marginBottom: 4,
+  scoreRow: { marginTop: 8 },
+  scoreLabel: { fontSize: 12, color: theme.colors.subtext, marginBottom: 6, fontWeight: "600" },
+
+  progressWrap: { flexDirection: "row", alignItems: "center", gap: 10 },
+  progressTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
   },
-  recentVoteMetaRow: {
+  progressFill: { height: "100%", backgroundColor: "rgba(99,102,241,0.55)" },
+  progressText: { width: 70, textAlign: "right", fontSize: 12, color: theme.colors.text, fontWeight: "700" },
+
+  readingCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  readingTitle: { fontSize: 13, fontWeight: "800", color: theme.colors.text, marginBottom: 6 },
+  readingLine: { fontSize: 13, color: theme.colors.subtext, lineHeight: 18, marginTop: 4 },
+
+  // ✅ D+ Lecture politique assistée
+  dplusCard: {
+    marginTop: 10,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  dplusHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 6,
+    gap: 10,
+    marginBottom: 6,
   },
-  recentVoteResultText: {
-    fontSize: 12,
-    color: theme.colors.subtext,
-  },
-  votePill: {
+  dplusTitle: { fontSize: 13, fontWeight: "900", color: theme.colors.text },
+
+  dplusConfidencePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    borderWidth: 1,
   },
-  votePillText: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: theme.colors.text,
+  dplusConfidenceText: { fontSize: 11, fontWeight: "800", color: theme.colors.text },
+
+  dplusPillHigh: {
+    backgroundColor: "rgba(34,197,94,0.12)",
+    borderColor: "rgba(34,197,94,0.25)",
+  },
+  dplusPillMid: {
+    backgroundColor: "rgba(234,179,8,0.12)",
+    borderColor: "rgba(234,179,8,0.25)",
+  },
+  dplusPillLow: {
+    backgroundColor: "rgba(239,68,68,0.10)",
+    borderColor: "rgba(239,68,68,0.20)",
   },
 
-  // Footer
-  footerNoteContainer: {
-    marginTop: 8,
-    marginBottom: 20,
-    alignItems: "center",
-    paddingHorizontal: 16,
+  dplusProfile: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: "900",
+    color: theme.colors.text,
   },
-  footerNote: {
+  dplusLine: {
+    marginTop: 6,
+    fontSize: 13,
+    color: theme.colors.subtext,
+    lineHeight: 18,
+  },
+  dplusFootnote: {
+    marginTop: 8,
     fontSize: 11,
     color: theme.colors.subtext,
-    textAlign: "center",
+    opacity: 0.85,
   },
+
+  quickContextCard: {
+    marginTop: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  quickContextRow: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
+  quickContextItem: { flex: 1 },
+  quickContextLabel: { fontSize: 11, color: theme.colors.subtext, marginBottom: 2 },
+  quickContextValue: { fontSize: 15, fontWeight: "700", color: theme.colors.text },
+
+  timelineContainer: {
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: theme.colors.surface || "#020617",
+  },
+  timelineTitle: { fontSize: 13, fontWeight: "700", color: theme.colors.text, marginBottom: 4 },
+  timelineText: { fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
+
+  footerNoteContainer: { marginTop: 10, marginBottom: 8, alignItems: "center", paddingHorizontal: 16 },
+  footerNote: { fontSize: 11, color: theme.colors.subtext, textAlign: "center", opacity: 0.75 },
+
+  timelineChapter: {
+    marginBottom: 6,
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: "800",
+    opacity: 0.85,
+  },
+
+  // ✅ D+++ — Lecture politique assistée
+d3Card: {
+  marginTop: 10,
+  borderRadius: 14,
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  backgroundColor: theme.colors.surface || "#020617",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.08)",
+},
+d3HeaderRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+},
+d3Title: {
+  fontSize: 13,
+  fontWeight: "900",
+  color: theme.colors.text,
+  letterSpacing: 0.2,
+},
+d3Badge: {
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 999,
+  borderWidth: 1,
+},
+d3BadgeHigh: {
+  backgroundColor: "rgba(34,197,94,0.12)",
+  borderColor: "rgba(34,197,94,0.25)",
+},
+d3BadgeMid: {
+  backgroundColor: "rgba(234,179,8,0.12)",
+  borderColor: "rgba(234,179,8,0.25)",
+},
+d3BadgeLow: {
+  backgroundColor: "rgba(239,68,68,0.10)",
+  borderColor: "rgba(239,68,68,0.22)",
+},
+d3BadgeText: {
+  color: theme.colors.text,
+  fontSize: 11,
+  fontWeight: "900",
+  opacity: 0.9,
+},
+d3Profile: {
+  marginTop: 8,
+  fontSize: 15,
+  fontWeight: "900",
+  color: theme.colors.text,
+},
+d3Label: {
+  marginTop: 10,
+  fontSize: 12,
+  fontWeight: "800",
+  color: theme.colors.subtext,
+  letterSpacing: 0.15,
+},
+d3Text: {
+  marginTop: 4,
+  fontSize: 13,
+  color: theme.colors.text,
+  lineHeight: 18,
+},
+d3Footnote: {
+  marginTop: 10,
+  fontSize: 12,
+  color: theme.colors.subtext,
+  lineHeight: 17,
+  opacity: 0.9,
+},
+
+  glowPour: {
+    backgroundColor: "rgba(34,197,94,0.95)",
+    shadowColor: "rgba(34,197,94,0.9)",
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+  },
+  glowContre: {
+    backgroundColor: "rgba(239,68,68,0.95)",
+    shadowColor: "rgba(239,68,68,0.9)",
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+  },
+  glowAbst: {
+    backgroundColor: "rgba(234,179,8,0.95)",
+    shadowColor: "rgba(234,179,8,0.9)",
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+  },
+  glowNv: {
+    backgroundColor: "rgba(148,163,184,0.75)",
+    shadowColor: "rgba(148,163,184,0.6)",
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+  },
+  dppCard: {
+  marginTop: 10,
+  borderRadius: 12,
+  paddingVertical: 10,
+  paddingHorizontal: 10,
+  backgroundColor: theme.colors.surface || "#020617",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.08)",
+},
+dppHeader: {
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 4,
+},
+dppTitle: { fontSize: 13, fontWeight: "900", color: theme.colors.text },
+dppHint: { fontSize: 11, fontWeight: "700", color: theme.colors.subtext, opacity: 0.9 },
+
+dppSectionTitle: {
+  marginTop: 2,
+  fontSize: 12,
+  fontWeight: "900",
+  color: theme.colors.text,
+  opacity: 0.9,
+},
+dppMuted: { marginTop: 6, fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
+
+dppItem: {
+  borderRadius: 14,
+  paddingVertical: 10,
+  paddingHorizontal: 10,
+  backgroundColor: theme.colors.card,
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.06)",
+},
+dppItemTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 },
+dppItemTitle: { flex: 1, fontSize: 13, fontWeight: "800", color: theme.colors.text, lineHeight: 18 },
+dppItemGo: { fontSize: 16, fontWeight: "900", color: theme.colors.subtext, opacity: 0.9 },
+dppItemMeta: { marginTop: 6, fontSize: 11, fontWeight: "700", color: theme.colors.subtext, opacity: 0.95 },
+
+dppLine: { marginTop: 6, fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
+dppFootnote: { marginTop: 10, fontSize: 11, color: theme.colors.subtext, opacity: 0.75 },
+
+// ✅ D++++ — Signaux récents
+d4Card: {
+  marginTop: 10,
+  borderRadius: 14,
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  backgroundColor: theme.colors.surface || "#020617",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.08)",
+},
+d4HeaderRow: {
+  flexDirection: "row",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+},
+d4Title: {
+  fontSize: 13,
+  fontWeight: "900",
+  color: theme.colors.text,
+},
+d4Subtitle: {
+  fontSize: 12,
+  fontWeight: "700",
+  color: theme.colors.subtext,
+},
+d4PillsRow: {
+  flexDirection: "row",
+  flexWrap: "wrap",
+  gap: 8,
+  marginTop: 10,
+},
+d4Pill: {
+  paddingHorizontal: 10,
+  paddingVertical: 7,
+  borderRadius: 999,
+  borderWidth: 1,
+},
+d4Pill_ok: {
+  backgroundColor: "rgba(34,197,94,0.10)",
+  borderColor: "rgba(34,197,94,0.20)",
+},
+d4Pill_warn: {
+  backgroundColor: "rgba(239,68,68,0.10)",
+  borderColor: "rgba(239,68,68,0.22)",
+},
+d4Pill_info: {
+  backgroundColor: "rgba(148,163,184,0.10)",
+  borderColor: "rgba(148,163,184,0.18)",
+},
+d4PillText: {
+  fontSize: 12,
+  fontWeight: "800",
+  color: theme.colors.text,
+  opacity: 0.92,
+},
+d4MiniGrid: {
+  marginTop: 12,
+  flexDirection: "row",
+  gap: 8,
+},
+d4MiniItem: {
+  flex: 1,
+  borderRadius: 12,
+  paddingVertical: 10,
+  paddingHorizontal: 10,
+  backgroundColor: "rgba(255,255,255,0.04)",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.06)",
+},
+d4MiniLabel: {
+  fontSize: 11,
+  fontWeight: "800",
+  color: theme.colors.subtext,
+},
+d4MiniValue: {
+  marginTop: 6,
+  fontSize: 16,
+  fontWeight: "900",
+  color: theme.colors.text,
+},
+d4Label: {
+  fontSize: 12,
+  fontWeight: "900",
+  color: theme.colors.subtext,
+  letterSpacing: 0.15,
+},
+d4HintRow: {
+  flexDirection: "row",
+  gap: 10,
+  marginTop: 10,
+  alignItems: "flex-start",
+},
+d4Dot: {
+  width: 10,
+  height: 10,
+  borderRadius: 999,
+  marginTop: 3,
+},
+d4Dot_ok: { backgroundColor: "rgba(34,197,94,0.85)" },
+d4Dot_warn: { backgroundColor: "rgba(239,68,68,0.85)" },
+d4Dot_info: { backgroundColor: "rgba(148,163,184,0.85)" },
+d4HintTitle: {
+  fontSize: 12,
+  fontWeight: "900",
+  color: theme.colors.text,
+},
+d4HintText: {
+  marginTop: 2,
+  fontSize: 13,
+  color: theme.colors.subtext,
+  lineHeight: 18,
+},
+d4Footnote: {
+  marginTop: 12,
+  fontSize: 11,
+  color: theme.colors.subtext,
+  opacity: 0.8,
+  lineHeight: 16,
+},
+
+// ✅ D+++++ — Lecture intelligente
+d5Card: {
+  marginTop: 10,
+  borderRadius: 14,
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  backgroundColor: theme.colors.surface || "#020617",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.08)",
+},
+d5Header: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+},
+d5Title: {
+  fontSize: 13,
+  fontWeight: "900",
+  color: theme.colors.text,
+},
+d5Chip: {
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 999,
+  borderWidth: 1,
+},
+d5Chip_ok: { backgroundColor: "rgba(34,197,94,0.10)", borderColor: "rgba(34,197,94,0.22)" },
+d5Chip_warn: { backgroundColor: "rgba(239,68,68,0.10)", borderColor: "rgba(239,68,68,0.22)" },
+d5Chip_info: { backgroundColor: "rgba(148,163,184,0.10)", borderColor: "rgba(148,163,184,0.18)" },
+d5ChipText: {
+  fontSize: 11,
+  fontWeight: "900",
+  color: theme.colors.text,
+  opacity: 0.92,
+},
+
+d5SectionLabel: {
+  fontSize: 12,
+  fontWeight: "900",
+  color: theme.colors.subtext,
+  letterSpacing: 0.15,
+},
+d5Muted: {
+  marginTop: 6,
+  fontSize: 13,
+  color: theme.colors.subtext,
+  lineHeight: 18,
+  opacity: 0.9,
+},
+
+d5Row: {
+  marginTop: 10,
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  paddingVertical: 10,
+  paddingHorizontal: 10,
+  borderRadius: 12,
+  backgroundColor: "rgba(255,255,255,0.04)",
+  borderWidth: 1,
+  borderColor: "rgba(255,255,255,0.06)",
+},
+d5RowLeft: { flex: 1 },
+d5RowTitle: {
+  fontSize: 13,
+  fontWeight: "900",
+  color: theme.colors.text,
+  lineHeight: 18,
+},
+d5RowSub: {
+  marginTop: 4,
+  fontSize: 12,
+  fontWeight: "700",
+  color: theme.colors.subtext,
+},
+d5RowCta: {
+  fontSize: 12,
+  fontWeight: "900",
+  color: theme.colors.subtext,
+  opacity: 0.95,
+},
+d5Foot: {
+  marginTop: 12,
+  fontSize: 11,
+  color: theme.colors.subtext,
+  opacity: 0.75,
+  lineHeight: 16,
+},
+
+
 });

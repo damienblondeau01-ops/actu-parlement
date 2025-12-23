@@ -1,6 +1,7 @@
 {
   "name": "actu-parlement-ingestion",
   "version": "1.0.0",
+  "type": "module",
   "main": "ingest_all.js",
   "scripts": {
     "ingest:deputes": "node deputes/ingest_deputes.js",

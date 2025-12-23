@@ -2,15 +2,32 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "@lib/*": [
+        "lib/*"
+      ],
+      "@components/*": [
+        "components/*"
+      ]
+    },
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
   },
   "include": [
     "app",
-    "lib"
+    "lib",
+    "components"
   ],
   "exclude": [
     "node_modules",
     "export_chat",
-    "ingestion"
+    "ingestion",
+    "dist",
+    "build"
   ]
 }
