@@ -56,6 +56,15 @@ jobs:
           ONLY_LEG: "17"
         run: npm run dossiers:sync
 
+       - name: Debug which importer is referenced
+        run: |
+          echo "HEAD = $(git rev-parse HEAD)"
+          echo "--- grep sync_daily_17.js ---"
+          grep -n "fetch_scrutins_from_local_zip" ingestion/sync_daily_17.js || true
+          echo "--- ls scrutins ---"
+          ls -la ingestion/scrutins | sed -n '1,200p'
+
+
       # ✅ 3) Ton pipeline existant
       - name: Run daily sync L17
         env:
