@@ -42,6 +42,22 @@ jobs:
         working-directory: ingestion
         run: npm ci
 
+      - name: Check required secrets
+        run: |
+          if [ -z "${{ secrets.DOSSIERS_ZIP_URL }}" ]; then
+            echo "❌ Missing secret: DOSSIERS_ZIP_URL"
+            exit 1
+          fi
+          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "❌ Missing secret: SUPABASE_URL"
+            exit 1
+          fi
+          if [ -z "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
+            echo "❌ Missing secret: SUPABASE_SERVICE_ROLE_KEY"
+            exit 1
+          fi
+          echo "✅ Secrets OK"
+
       # ✅ 1) Download ZIP dossiers (L17)
       - name: Download dossiers ZIP
         env:
