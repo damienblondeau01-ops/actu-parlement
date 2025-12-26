@@ -1,7 +1,7 @@
 name: Sync Daily L17 (Supabase)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   schedule:
     - cron: "30 3 * * *"
 
@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -33,37 +33,36 @@ jobs:
       - name: Debug versions
         run: node -v && npm -v
 
-      # Root deps : on skippe les scripts pour éviter "expo-router install"
-      - name: Install deps (root, ignore scripts)
+      # Root deps: on skippe les scripts pour éviter "expo-router install"
+      - name: Install dependencies (root)
         run: npm ci --ignore-scripts
 
-      # Dépendances d'ingestion
-      - name: Install deps (ingestion)
+      # Ingestion deps
+      - name: Install dependencies (ingestion)
         working-directory: ingestion
         run: npm ci
 
-      # ✅ NEW : dossiers
-      - name: Sync dossiers legislatifs (latest)
+      # ✅ 1) Download ZIP dossiers (L17)
+      - name: Download dossiers ZIP
         env:
-          CI: "true"
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: npm run dossiers:sync
-
-      - name: Sync dossiers (download + import)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DOSSIERS_ZIP_URL: ${{ secrets.DOSSIERS_ZIP_URL }}
+        run: npm run dossiers:download
+
+      # ✅ 2) Import dossiers -> table lois (idempotent)
+      - name: Import dossiers into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ONLY_LEG: "17"
         run: npm run dossiers:sync
 
-
-      # ✅ Ton pipeline existant
-      - name: Run sync daily L17
+      # ✅ 3) Ton pipeline existant
+      - name: Run daily sync L17
         env:
           CI: "true"
           SKIP_PG_REFRESH: "1"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run sync:daily:l17
+
 
