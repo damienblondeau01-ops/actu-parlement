@@ -1,64 +1,47 @@
 // lib/navigation.ts
-// Centralise la navigation "id -> route" pour éviter les régressions.
+// ✅ Façade rétro-compat : on centralise les exports de navigation ici,
+// mais la SOURCE DE VÉRITÉ est lib/routes.ts.
+// Objectif : éviter toute régression (ne jamais "deviner" une loi).
 
 export type RouteLike = string;
 
-/** Normalise et encode un segment d'URL */
-function enc(x: string) {
-  return encodeURIComponent(String(x ?? ""));
-}
+/** Re-export complet du canon (routeFromItemId, routeFromActuItem, helpers, etc.) */
+export * from "./routes";
 
-/** True si l'id ressemble à un scrutin */
-export function isScrutinId(id?: string | null) {
-  const s = String(id ?? "");
-  return s.startsWith("scrutin-");
-}
+// -------
+// Aliases utiles (compat anciens imports / anciens usages)
+// -------
+
+import {
+  routeFromItemId as routeFromItemIdCanon,
+  routeFromActuItem as routeFromActuItemCanon,
+  isScrutinId as isScrutinIdCanon,
+  isLoiId as isLoiIdCanon,
+} from "./routes";
 
 /**
- * ✅ ROUTE UNIQUE (anti-régression)
- * Règle absolue :
- * - scrutin-* => /scrutins/:id
- * - sinon => /lois/:id
- *
- * (On ne "devine" pas amendement/motion/declaration ici : mieux vaut ne pas router
- * plutôt que d'ouvrir une mauvaise fiche.)
+ * Alias compat : mêmes règles que routes.ts
+ * (retourne string | null)
  */
-export function routeFromItemId(id: string): RouteLike {
-  const s = String(id ?? "");
-  if (!s) return "/";
-
-  if (isScrutinId(s)) return `/scrutins/${enc(s)}`;
-
-  // ⚠️ par défaut : loi
-  return `/lois/${enc(s)}`;
+export function routeFromItemId(id: string) {
+  return routeFromItemIdCanon(id);
 }
 
 /**
- * Variante utile quand tu as un objet ActuItem (entity + loi_id + id)
- * - si entity= scrutins => /scrutins/:id (id)
- * - si entity= loi => /lois/:loi_id (ou id)
- * - sinon => null (pas de routage automatique)
+ * Alias compat ActuItem
  */
 export function routeFromActuItem(it: {
   id: string;
   entity?: string | null;
   loi_id?: string | null;
-}): string | null {
-  const id = String(it?.id ?? "");
-  const entity = String(it?.entity ?? "");
-  const loiId = it?.loi_id ? String(it.loi_id) : null;
+}) {
+  return routeFromActuItemCanon(it);
+}
 
-  if (!id) return null;
-
-  if (entity === "scrutin" || isScrutinId(id)) {
-    return `/scrutins/${enc(id)}`;
-  }
-
-  if (entity === "loi") {
-    const k = loiId ?? id;
-    return `/lois/${enc(k)}`;
-  }
-
-  // pas de guess pour le reste
-  return null;
+/** Helpers compat */
+export function isScrutinId(id?: string | null) {
+  return isScrutinIdCanon(id);
+}
+export function isLoiId(id?: string | null) {
+  return isLoiIdCanon(id);
 }

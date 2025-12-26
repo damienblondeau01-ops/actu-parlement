@@ -69,12 +69,40 @@ function normalizeNumeroScrutin(numero: string | number): string {
   const raw = String(numero ?? "").trim();
   if (!raw) return "";
 
+  // slug = pas un numéro
   if (raw.toLowerCase().startsWith("scrutin-")) return "";
 
+  // garde le dernier paquet de chiffres
   const match = raw.match(/(\d+)/g);
   if (match && match.length > 0) return match[match.length - 1];
 
   return "";
+}
+
+function isDigits(s: string) {
+  return /^\d+$/.test(s);
+}
+
+type ScrutinKey =
+  | { kind: "numero"; numero: string } // string car supabase .eq sur text/numeric tolère string
+  | { kind: "loi_id"; loi_id: string };
+
+function normalizeScrutinKey(input: string | number): ScrutinKey | null {
+  const raw = String(input ?? "").trim();
+  if (!raw) return null;
+
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("scrutin-")) return { kind: "loi_id", loi_id: raw };
+
+  const normalized = normalizeNumeroScrutin(raw);
+  const probe = normalized || raw;
+
+  if (!probe) return null;
+  if (isDigits(probe)) return { kind: "numero", numero: probe };
+
+  // ex: VTANR... => normalizeNumeroScrutin aurait déjà extrait les digits,
+  // donc ici on retombe rarement. On garde quand même une tentative "numero".
+  return { kind: "numero", numero: probe };
 }
 
 type ScrutinsDataRow = {
@@ -105,25 +133,37 @@ const SCRUTINS_DATA_SELECT = `
  * Récupération robuste d’une ligne scrutins_data :
  * - si input est "scrutin-..." : on cherche sur scrutins_data.loi_id (eq puis ilike)
  * - sinon : on cherche sur scrutins_data.numero (eq) puis fallback ilike
+ *
+ * ✅ Retourne aussi un "numeroResolved" (numéro utilisé pour votes_deputes_detail)
+ * ✅ Logs plus clairs : plus de "(none)" anxiogène
  */
 async function fetchScrutinRowFromScrutinsData(
   input: string | number
-): Promise<{ row: ScrutinsDataRow | null; error: any | null }> {
-  const raw = String(input ?? "").trim();
-  const rawLower = raw.toLowerCase();
+): Promise<{
+  row: ScrutinsDataRow | null;
+  numeroResolved: string; // "525" etc (vide si introuvable)
+  error: any | null;
+  key: ScrutinKey | null;
+}> {
+  const key = normalizeScrutinKey(input);
+  if (!key) return { row: null, numeroResolved: "", error: null, key: null };
 
-  // (A) Cas slug "scrutin-..." => lookup par loi_id
-  if (raw && rawLower.startsWith("scrutin-")) {
+  // (A) Cas slug => lookup loi_id
+  if (key.kind === "loi_id") {
     // 1) eq strict
     {
       const { data, error } = await supabase
         .from("scrutins_data")
         .select(SCRUTINS_DATA_SELECT)
-        .eq("loi_id", raw)
+        .eq("loi_id", key.loi_id)
         .limit(1);
 
-      if (error) return { row: null, error };
-      if (data && data.length > 0) return { row: data[0] as any, error: null };
+      if (error) return { row: null, numeroResolved: "", error, key };
+      if (data && data.length > 0) {
+        const row = data[0] as any as ScrutinsDataRow;
+        const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || "";
+        return { row, numeroResolved, error: null, key };
+      }
     }
 
     // 2) fallback ilike prefix (au cas où)
@@ -131,20 +171,23 @@ async function fetchScrutinRowFromScrutinsData(
       const { data, error } = await supabase
         .from("scrutins_data")
         .select(SCRUTINS_DATA_SELECT)
-        .ilike("loi_id", `${raw}%`)
+        .ilike("loi_id", `${key.loi_id}%`)
         .limit(1);
 
-      if (error) return { row: null, error };
-      if (data && data.length > 0) return { row: data[0] as any, error: null };
+      if (error) return { row: null, numeroResolved: "", error, key };
+      if (data && data.length > 0) {
+        const row = data[0] as any as ScrutinsDataRow;
+        const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || "";
+        return { row, numeroResolved, error: null, key };
+      }
     }
 
-    return { row: null, error: null };
+    return { row: null, numeroResolved: "", error: null, key };
   }
 
-  // (B) Cas numero / VTANR...
-  const numeroStr = normalizeNumeroScrutin(input);
-  const probe = numeroStr || raw;
-  if (!probe) return { row: null, error: null };
+  // (B) Cas numero
+  const probe = key.numero;
+  if (!probe) return { row: null, numeroResolved: "", error: null, key };
 
   // 1) eq strict
   {
@@ -154,8 +197,12 @@ async function fetchScrutinRowFromScrutinsData(
       .eq("numero", probe)
       .limit(1);
 
-    if (error) return { row: null, error };
-    if (data && data.length > 0) return { row: data[0] as any, error: null };
+    if (error) return { row: null, numeroResolved: "", error, key };
+    if (data && data.length > 0) {
+      const row = data[0] as any as ScrutinsDataRow;
+      const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || probe;
+      return { row, numeroResolved, error: null, key };
+    }
   }
 
   // 2) fallback ilike prefix
@@ -166,37 +213,44 @@ async function fetchScrutinRowFromScrutinsData(
       .ilike("numero", `${probe}%`)
       .limit(1);
 
-    if (error) return { row: null, error };
-    if (data && data.length > 0) return { row: data[0] as any, error: null };
+    if (error) return { row: null, numeroResolved: "", error, key };
+    if (data && data.length > 0) {
+      const row = data[0] as any as ScrutinsDataRow;
+      const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || probe;
+      return { row, numeroResolved, error: null, key };
+    }
   }
 
-  return { row: null, error: null };
+  return { row: null, numeroResolved: "", error: null, key };
 }
 
 /**
  * Récupère un scrutin (scrutins_data) + votes (votes_deputes_detail).
  */
 export async function fetchScrutinAvecVotes(
-  numero: string | number
+  input: string | number
 ): Promise<{
   scrutin: ScrutinEnrichi | null;
   votes: VoteDeputeScrutin[];
   error: string | null;
 }> {
   try {
-    const raw = String(numero ?? "").trim();
-    const numeroFromInput = normalizeNumeroScrutin(numero);
+    const raw = String(input ?? "").trim();
+    const inputNormalizedNumero = normalizeNumeroScrutin(input);
+    const inputKey = normalizeScrutinKey(input);
 
-    console.log("[fetchScrutinAvecVotes] numero (input) =", raw);
+    console.log("[fetchScrutinAvecVotes] input =", raw);
     console.log(
-      "[fetchScrutinAvecVotes] numero (normalisé) =",
-      numeroFromInput || "(none)"
+      "[fetchScrutinAvecVotes] inputKey =",
+      inputKey ? `${inputKey.kind}:${inputKey.kind === "numero" ? inputKey.numero : inputKey.loi_id}` : "(empty)"
     );
+    if (inputNormalizedNumero) {
+      console.log("[fetchScrutinAvecVotes] inputNormalizedNumero =", inputNormalizedNumero);
+    }
 
     /* 1️⃣ Scrutin de base depuis scrutins_data */
-    const { row: sd, error: sdError } = await fetchScrutinRowFromScrutinsData(
-      numero
-    );
+    const { row: sd, numeroResolved, error: sdError, key } =
+      await fetchScrutinRowFromScrutinsData(input);
 
     if (sdError) {
       console.warn("[fetchScrutinAvecVotes] err scrutins_data", sdError);
@@ -204,23 +258,18 @@ export async function fetchScrutinAvecVotes(
     }
 
     if (!sd) {
-      console.warn(
-        "[fetchScrutinAvecVotes] aucun scrutin trouvé dans scrutins_data pour",
-        raw
-      );
+      console.warn("[fetchScrutinAvecVotes] aucun scrutin trouvé dans scrutins_data pour", raw);
       return { scrutin: null, votes: [], error: "SCRUTIN_NOT_FOUND" };
     }
 
-    // ✅ numeroVotes = numéro "4240" utilisé par votes_deputes_detail.numero_scrutin
-    const numeroVotes =
-      normalizeNumeroScrutin(String(sd.numero ?? "")) || numeroFromInput;
+    // ✅ numeroVotes = numéro utilisé par votes_deputes_detail.numero_scrutin
+    // Priorité : numeroResolved (venant de scrutins_data.numero) > inputNormalizedNumero
+    const numeroVotes = numeroResolved || inputNormalizedNumero;
 
+    console.log("[fetchScrutinAvecVotes] resolvedFrom =", key?.kind ?? "unknown");
     console.log("[fetchScrutinAvecVotes] scrutins_data.loi_id =", sd.loi_id);
     console.log("[fetchScrutinAvecVotes] scrutins_data.numero =", sd.numero);
-    console.log(
-      "[fetchScrutinAvecVotes] numeroVotes (pour votes_deputes_detail) =",
-      numeroVotes || "(none)"
-    );
+    console.log("[fetchScrutinAvecVotes] numeroVotes (votes_deputes_detail) =", numeroVotes || "(empty)");
 
     // ⚠️ Ici tu n’alimentes pas les scores (ils viennent d’ailleurs)
     const nb_pour: number | null = null;
@@ -233,8 +282,8 @@ export async function fetchScrutinAvecVotes(
     const nbVotesTotal = nb_total_votes ?? nb_exprimes ?? null;
 
     const scrutin: ScrutinEnrichi = {
-      // ✅ IMPORTANT : pour l’app on préfère l’id route (4240) si dispo
-      numero_scrutin: String(numeroVotes || sd.numero || ""),
+      // ✅ pour l’app on préfère un identifiant lisible (numéro) si dispo
+      numero_scrutin: String(numeroVotes || sd.numero || raw || ""),
 
       date_scrutin: (sd as any).date_scrutin ?? null,
       titre_scrutin: (sd as any).titre ?? null,
@@ -257,9 +306,7 @@ export async function fetchScrutinAvecVotes(
 
     /* 2️⃣ Votes individuels depuis votes_deputes_detail */
     if (!numeroVotes) {
-      console.warn(
-        "[fetchScrutinAvecVotes] numeroVotes vide -> skip votes (fiche scrutin OK)"
-      );
+      console.warn("[fetchScrutinAvecVotes] numeroVotes vide -> skip votes (fiche scrutin OK)");
       return { scrutin, votes: [], error: null };
     }
 
@@ -310,9 +357,7 @@ export async function fetchScrutinAvecVotes(
     }
 
     if (votes.length === 0) {
-      console.log(
-        "[fetchScrutinAvecVotes] aucun vote en 17/16, fallback sans filtre législature"
-      );
+      console.log("[fetchScrutinAvecVotes] aucun vote en 17/16, fallback sans filtre législature");
 
       const { data: votesRows, error: votesError } = await supabase
         .from("votes_deputes_detail")
@@ -338,10 +383,7 @@ export async function fetchScrutinAvecVotes(
 
       if (votesError) {
         lastVotesError = votesError;
-        console.warn(
-          "[fetchScrutinAvecVotes] err votes (fallback sans législature)",
-          votesError
-        );
+        console.warn("[fetchScrutinAvecVotes] err votes (fallback sans législature)", votesError);
       } else if (votesRows && votesRows.length > 0) {
         votes = votesRows as VoteDeputeScrutin[];
         console.log(
@@ -352,10 +394,7 @@ export async function fetchScrutinAvecVotes(
     }
 
     if (votes.length === 0 && lastVotesError) {
-      console.warn(
-        "[fetchScrutinAvecVotes] aucun vote trouvé, dernière erreur =",
-        lastVotesError
-      );
+      console.warn("[fetchScrutinAvecVotes] aucun vote trouvé, dernière erreur =", lastVotesError);
     }
 
     return { scrutin, votes, error: null };

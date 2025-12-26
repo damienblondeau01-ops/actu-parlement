@@ -22,14 +22,22 @@ export type ActuItem = {
   route?: { href?: string } | null;
 };
 
+/** ✅ Cible de navigation canonique (UI “bête” = suit ce champ) */
+export type ActuTarget =
+  | { kind: "loi"; id: string } // id = loiKey (it.loi_id si dispo sinon inferred key)
+  | { kind: "scrutin"; id: string } // id = ActuItem.id du scrutin
+  | { kind: "amendement"; id: string }
+  | { kind: "motion"; id: string }
+  | { kind: "declaration"; id: string };
+
 export type GroupedActuRow = {
   kind: "group";
   groupKey: string;
   entity: Entity;
 
   /**
-   * ⚠️ Ici, on stocke une "loiKey" stable (loi_id réel si dispo, sinon fallback intelligent)
-   * Exemple: "jo-2030", "finances-2026", "loi:reforme-assurance-chomage", "title:..."
+   * ⚠️ Historique : ce champ contenait en pratique "loiKey".
+   * On le garde pour compatibilité, mais on l’alimente bien avec une clé de loi (loiKey).
    */
   loi_id?: string | null;
 
@@ -43,10 +51,17 @@ export type GroupedActuRow = {
     scrutins: number;
     articles: number;
   };
+
+  /** ✅ Navigation stable (évite routes ambiguës/boucles) */
+  primaryTarget?: ActuTarget;
+  secondaryTargets?: ActuTarget[];
+
   display: {
-    title: string; // sujet éditorial (ex: "Loi Finances 2026")
-    subtitle: string; // détail (ex: "73 scrutins", etc.)
+    title: string; // éditorial court (lisible)
+    subtitle: string; // stats (ex: "3 scrutins • 3 amendements")
     tag: string; // ex: phase_label
+    longTitle?: string; // officiel / long (pliable dans HERO)
+    highlights?: string[]; // micro-timeline inline (2–3 bullets)
   };
 };
 
@@ -63,10 +78,6 @@ function normSlug(s: string) {
     .replace(/(^-|-$)/g, "");
 }
 
-/* =========================
-   Sujet / Loi
-========================= */
-
 type InferredSujet = { key: string; label: string } | null;
 
 function cleanSpaces(s: string) {
@@ -80,95 +91,395 @@ function capitalizeSentence(s: string) {
 }
 
 /**
- * Nettoie les prefixes trop "granulaires" qu'on voit souvent dans les titres:
- * - "l'article 2 de la proposition de loi ..."
- * - "l'amendement n° 1 de ..."
- * - "amendement identique ..."
- *
- * Objectif: remonter au "sujet loi" au lieu de l’article/amendement.
+ * Coupe proprement et ajoute "…" seulement si besoin.
  */
-function stripGranularPrefix(text: string): string {
-  let s = cleanSpaces(text);
+function clampText(s: string, max = 180) {
+  const t = cleanSpaces(s);
+  if (!t) return t;
+  if (t.length <= max) return t;
 
-  // article X de/du ...
+  const cut = t.slice(0, max + 1);
+  const lastSpace = Math.max(
+    cut.lastIndexOf(" "),
+    cut.lastIndexOf("—"),
+    cut.lastIndexOf(",")
+  );
+  const safe = (lastSpace > 40 ? cut.slice(0, lastSpace) : t.slice(0, max)).trimEnd();
+  return safe + "…";
+}
+
+function smartClampFR(s: string, max = 90) {
+  let t = cleanSpaces(s);
+  if (!t) return t;
+  if (t.length <= max) return t;
+
+  let cut = t.slice(0, max);
+  let lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace < 40) lastSpace = max;
+
+  cut = cut.slice(0, lastSpace).trimEnd();
+  cut = cut.replace(/\b(d’|de|du|des|à|au|aux|la|le|les|l’|l')$/i, "").trimEnd();
+  cut = cut.replace(/[’']$/g, "").trimEnd();
+
+  return cut + "…";
+}
+
+/** ✅ Micro-polish final (ponctuation / dash / n°), appliqué en toute fin */
+function normalizeEditorialTitle(s: string) {
+  let t = cleanSpaces(s);
+
+  // Dash premium unique
+  t = t.replace(/\s*[-–—]\s*/g, " — ");
+
+  // “amendement n°”
+  t = t.replace(/\bamendement\s+n\s*[°º]?\s*/gi, "amendement n°");
+  t = t.replace(/\bn°\s+/gi, "n°");
+
+  // espaces avant ponctuation
+  t = t.replace(/\s+:/g, " :");
+  t = t.replace(/\s+\./g, ".");
+  t = cleanSpaces(t);
+
+  return t;
+}
+
+/* =========================
+   Nettoyage (moins destructeur)
+========================= */
+
+function extractAmendementSujet(text: string): string | null {
+  const raw = cleanSpaces(text);
+  if (!raw) return null;
+
+  const lower = raw.toLowerCase();
+
+  const m =
+    raw.match(
+      /\b(visant à|portant|tendant à|ayant pour objet de|afin de|relative à|relatif à)\s+([^.;\n]+)/i
+    ) ?? null;
+  if (m?.[2]) {
+    const sujet = cleanSpaces(m[2]);
+    if (sujet && sujet.length >= 12) return sujet;
+  }
+
+  const m2 = raw.match(/\bà\s+l['’]?article\s+\d+\s+([^.;\n]+)/i);
+  if (m2?.[1]) {
+    const tail = cleanSpaces(m2[1]);
+    const m2b =
+      tail.match(
+        /^(visant à|portant|tendant à|ayant pour objet de|afin de|relative à|relatif à)\s+(.+)$/i
+      ) ?? null;
+    const sujet = cleanSpaces(m2b?.[2] ?? tail);
+    if (sujet && sujet.length >= 12) return sujet;
+  }
+
+  const m3 = raw.match(/\b(après|avant)\s+l['’]?article\s+\d+\s+([^.;\n]+)/i);
+  if (m3?.[2]) {
+    const sujet = cleanSpaces(m3[2]);
+    if (sujet && sujet.length >= 12) return sujet;
+  }
+
+  if (
+    lower.includes("visant à") ||
+    lower.includes("portant") ||
+    lower.includes("relative à") ||
+    lower.includes("relatif à")
+  ) {
+    return raw;
+  }
+
+  return null;
+}
+
+function stripGranularPrefix(text: string): string {
+  const original = cleanSpaces(text);
+  if (!original) return "";
+
+  let s = original;
+
   s = s.replace(/^l['’]article\s+\d+\s+de\s+la\s+/i, "");
   s = s.replace(/^l['’]article\s+\d+\s+du\s+/i, "");
   s = s.replace(/^article\s+\d+\s+de\s+la\s+/i, "");
   s = s.replace(/^article\s+\d+\s+du\s+/i, "");
 
-  // amendement n° X de/à ...
-  s = s.replace(/^l['’]amendement\s+n[°º]?\s*\d+\s+de\s+/i, "");
-  s = s.replace(/^l['’]amendement\s+n[°º]?\s*\d+\s+à\s+/i, "");
-  s = s.replace(/^amendement\s+n[°º]?\s*\d+\s+de\s+/i, "");
-  s = s.replace(/^amendement\s+n[°º]?\s*\d+\s+à\s+/i, "");
+  if (
+    /^l['’]?amendement\b/i.test(s) ||
+    /^amendement\b/i.test(s) ||
+    /^sous-amendement\b/i.test(s)
+  ) {
+    const sujet = extractAmendementSujet(s);
+    if (sujet) return cleanSpaces(sujet);
 
-  // "amendement identique ..."
-  s = s.replace(/^l['’]amendement\s+identique\s+/i, "");
-  s = s.replace(/^amendement\s+identique\s+/i, "");
+    s = s
+      .replace(/^l['’]amendement\s+n[°º]?\s*\d+\s+de\s+/i, "")
+      .replace(/^l['’]amendement\s+n[°º]?\s*\d+\s+à\s+/i, "")
+      .replace(/^amendement\s+n[°º]?\s*\d+\s+de\s+/i, "")
+      .replace(/^amendement\s+n[°º]?\s*\d+\s+à\s+/i, "")
+      .replace(/^sous-amendement\s+n[°º]?\s*\d+\s+de\s+/i, "")
+      .replace(/^sous-amendement\s+n[°º]?\s*\d+\s+à\s+/i, "")
+      .replace(/^l['’]amendement\s+identique\s+/i, "")
+      .replace(/^amendement\s+identique\s+/i, "");
 
-  return s;
+    const t = cleanSpaces(s);
+    if (
+      !t ||
+      t.length < 8 ||
+      /^(m\.?|mme|monsieur|madame)\b/i.test(t) ||
+      t.toLowerCase() === "m"
+    ) {
+      return original;
+    }
+    return t;
+  }
+
+  return cleanSpaces(s);
+}
+
+/* =========================
+   ✅ Scrutin sur amendement (fix majeur + titres courts)
+========================= */
+
+function normApos(s: string) {
+  return cleanSpaces(String(s ?? "")).replace(/[’]/g, "'");
+}
+
+function isVoteOnAmendementFromOfficial(officialRaw: string) {
+  const s = normApos(officialRaw).toLowerCase();
+  return (
+    s.startsWith("l'amendement") ||
+    s.startsWith("amendement") ||
+    s.startsWith("sous-amendement")
+  );
+}
+
+function extractLawNameFromOfficial(officialRaw: string) {
+  const s = normApos(officialRaw);
+
+  const m =
+    s.match(/\bdu\s+(projet|proposition)\s+de\s+loi\s+(.+?)(?:\.|\(|$)/i) ||
+    s.match(/\bde\s+la\s+(proposition)\s+de\s+loi\s+(.+?)(?:\.|\(|$)/i);
+
+  if (!m) return "";
+  const full = `${m[1]} de loi ${m[2]}`;
+  return cleanSpaces(full);
+}
+
+function extractArticleFromOfficial(officialRaw: string) {
+  const s = normApos(officialRaw);
+  const m = s.match(/\b(?:a|à)\s+l'article\s+([^()]+?)(?:\s+du|\s+de\s+la|\s+\(|\.|$)/i);
+  if (!m?.[1]) return "";
+  return cleanSpaces(m[1]).replace(/\s+et\s+annexe.*$/i, "").trim();
+}
+
+function extractAmendementNumber(officialRaw: string) {
+  const s = normApos(officialRaw);
+  const m = s.match(/\bamendement(?:\s+de\s+\w+)?\s*n[°º]\s*(\d+)/i);
+  return m?.[1] ? m[1] : "";
+}
+
+function humanizeLawLabelFromOfficial(officialRaw: string): string {
+  const s = cleanSpaces(officialRaw);
+  if (!s) return "Texte en débat";
+
+  const inferred = inferSujetFromText(s);
+  if (inferred?.label) return inferred.label;
+
+  let x = s
+    .replace(/\bdu\s+projet\s+de\s+loi\s+/i, "")
+    .replace(/\bdu\s+proposition\s+de\s+loi\s+/i, "")
+    .replace(/\bde\s+la\s+proposition\s+de\s+loi\s+/i, "")
+    .replace(/^(projet|proposition)\s+de\s+loi\s+/i, "")
+    .trim();
+
+  x = stripGranularPrefix(x);
+  x = clampText(x, 80);
+
+  return x || "Texte en débat";
+}
+
+function stripLoiPrefix(s: string) {
+  return cleanSpaces(String(s ?? "")).replace(/^loi\s*:\s*/i, "");
+}
+
+function isCanonicalLawLabel(label: string) {
+  const t = stripLoiPrefix(label).toLowerCase();
+
+  if (/^plfss(\s+\d{4})?$/.test(t)) return true;
+  if (/^plf(\s+\d{4})?$/.test(t)) return true;
+
+  if (/^finances\s+\d{4}$/.test(t)) return true;
+  if (/^financement\s+\d{4}$/.test(t)) return true;
+
+  if (/^jeux olympiques(\s+\d{4})?$/.test(t)) return true;
+
+  if (t.startsWith("loi spéciale") || t.includes("article 45 lolf")) return true;
+
+  return false;
+}
+
+function stripLawProceduralPrefix(s: string) {
+  return cleanSpaces(s)
+    .replace(/^(du|de la)\s+/i, "")
+    .replace(/^(projet|proposition)\s+de\s+loi\s+/i, "")
+    .replace(/^loi\s+spéciale\s+/i, "Loi spéciale ")
+    .trim();
 }
 
 /**
- * Essaie de sortir un "sujet loi" lisible depuis du texte brut.
- * Objectif: produire "Loi Finances 2026", "Loi Jeux Olympiques 2030", "Loi Réforme …"
+ * ✅ Ancien comportement : “Loi — article : amendement n°…”
+ * On le garde (utile ailleurs), mais on NE DOIT PAS l’utiliser comme HERO
+ * quand row.entity === "scrutin" (sinon on “pollue” le scrutin par un amendement).
  */
+function buildCitizenTitleForScrutinAmendement(officialRaw: string) {
+  const law = extractLawNameFromOfficial(officialRaw);
+
+  const inferred = law ? inferSujetFromText(law) : null;
+  const inferredLabel = inferred?.label ? cleanSpaces(inferred.label) : "";
+
+  const lawClean = inferredLabel || stripLawProceduralPrefix(law || "");
+
+  const alias = (() => {
+    const full = normApos(lawClean);
+    if (!full) return "";
+
+    const low = full.toLowerCase();
+    const y = (low.match(/\b(20\d{2})\b/)?.[1] ?? "").trim();
+
+    if (low.includes("financement de la securite sociale")) return `PLFSS${y ? " " + y : ""}`;
+    if (low.includes("loi de finances")) return `PLF${y ? " " + y : ""}`;
+    if (low.includes("fin de gestion")) return `Fin de gestion${y ? " " + y : ""}`;
+
+    return full.length > 42 ? full.slice(0, 42).trim() + "…" : full;
+  })();
+
+  const art = extractArticleFromOfficial(officialRaw);
+  const num = extractAmendementNumber(officialRaw);
+
+  if (!alias && !art && !num) return "";
+
+  const base = alias ? stripLoiPrefix(alias) : "";
+  const usePrefix = base && !isCanonicalLawLabel(base);
+  const head = base ? (usePrefix ? `Loi : ${base}` : base) : "";
+
+  const parts: string[] = [];
+  if (head) parts.push(head);
+  if (art) parts.push(`article ${art}`);
+  if (num) parts.push(`amendement n°${num}`);
+
+  let out = "";
+  if (parts.length >= 3) out = `${parts[0]} — ${parts[1]} : ${parts[2]}`;
+  else if (parts.length === 2) out = `${parts[0]} — ${parts[1]}`;
+  else out = parts[0];
+
+  out = out.replace(/^Loi\s*:\s*/i, "");
+  out = cleanSpaces(out);
+  if (out.length > 88) out = out.slice(0, 88).trim() + "…";
+  return out;
+}
+
+/**
+ * ✅ GARDE-FOU (HERO) :
+ * Si un scrutin a un officialRaw qui commence par “l’amendement …”,
+ * alors le TITRE éditorial doit parler de la LOI (PLFSS, PLF, Loi spéciale…),
+ * et JAMAIS reprendre “amendement n°…” / “article …”.
+ */
+function buildHeroTitleForScrutinWhenOfficialIsAmendement(officialRaw: string): string {
+  const law = extractLawNameFromOfficial(officialRaw);
+
+  // 1) si on a réussi à extraire un nom de loi : on infère un label court (PLFSS 2026, etc.)
+  const inferred = law ? inferSujetFromText(law) : null;
+  let label =
+    cleanSpaces(inferred?.label ?? "") ||
+    stripLawProceduralPrefix(law || "") ||
+    humanizeLawLabelFromOfficial(officialRaw);
+
+  label = stripLoiPrefix(label);
+  label = normalizeEditorialTitle(label);
+
+  // 2) sécurité : si malgré tout ça contient "amendement"/"sous-amendement", on purge
+  const low = label.toLowerCase();
+  if (low.includes("amendement") || low.includes("sous-amendement")) {
+    label = stripGranularPrefix(label);
+    label = stripLoiPrefix(label);
+    label = cleanSpaces(label);
+  }
+
+  if (!label) return "Vote à l’Assemblée";
+  return smartClampFR(label, 90);
+}
+
+/* =========================
+   Sujet loi lisible depuis du texte brut.
+========================= */
+
 function inferSujetFromText(text: string): InferredSujet {
-  // ✅ nettoyage éditorial en amont (évite "article 2 de ..." comme sujet)
   const raw0 = cleanSpaces(text);
   const raw = stripGranularPrefix(raw0);
   const t = raw.toLowerCase();
 
-  // 1) JO / Olympiques (générique + année si trouvée)
-{
+  if (
+    t.includes("loi spéciale") &&
+    (t.includes("article 45") ||
+      t.includes("loi organique du 1er août 2001") ||
+      t.includes("loi organique du 1 août 2001"))
+  ) {
+    return { key: "loi-speciale-45-lolf", label: "Loi spéciale (article 45 LOLF)" };
+  }
+
+  {
+    const m =
+      t.match(
+        /(projet|proposition)\s+de\s+loi\s+de\s+financement\s+de\s+la\s+s[ée]curit[ée]\s+sociale\s+pour\s+(20\d{2})/
+      ) || t.match(/financement\s+de\s+la\s+s[ée]curit[ée]\s+sociale\s+pour\s+(20\d{2})/);
+    if (m) {
+      const year = m[m.length - 1];
+      return { key: `plfss-${year}`, label: `PLFSS ${year}` };
+    }
+  }
+
   if (t.includes("jeux olymp") || t.includes("olympique") || /\bjo\b/.test(t)) {
     const y = raw.match(/(20\d{2})/);
     const year = y?.[1];
-    if (year) return { key: `jo-${year}`, label: `Loi Jeux Olympiques ${year}` };
+    if (year) return { key: `jo-${year}`, label: `Jeux Olympiques ${year}` };
     return { key: "jo", label: "Jeux Olympiques" };
   }
-}
 
-  // 2) Loi de finances (PLF) - ex: "projet de loi de finances pour 2026"
   {
     const m =
       t.match(/(projet|proposition)\s+de\s+loi\s+de\s+finances\s+pour\s+(20\d{2})/) ||
       t.match(/loi\s+de\s+finances\s+pour\s+(20\d{2})/);
     if (m) {
       const year = m[m.length - 1];
-      return { key: `finances-${year}`, label: `Loi Finances ${year}` };
+      return { key: `finances-${year}`, label: `Finances ${year}` };
     }
   }
 
-  // 3) "projet de loi relatif à ..." => capture le sujet après "relatif à"
   {
     const m = raw.match(/projet de loi\s+(?:relatif|relative)\s+à\s+([^.;\n]+)/i);
     if (m?.[1]) {
-      const sujet = cleanSpaces(m[1]).slice(0, 90);
+      const sujet = clampText(m[1], 180);
       const key = `loi:${normSlug(sujet)}`;
-      return { key, label: `Loi ${capitalizeSentence(sujet)}` };
+      return { key, label: `${capitalizeSentence(sujet)}` };
     }
   }
 
-  // 4) "proposition de loi visant à ..." / "portant ..." / "relative à ..."
   {
     const m = raw.match(
       /proposition de loi\s+(visant à|portant|relative à|relatif à)\s+([^.;\n]+)/i
     );
     if (m?.[2]) {
-      const sujet = cleanSpaces(m[2]).slice(0, 90);
+      const sujet = clampText(m[2], 180);
       const key = `loi:${normSlug(sujet)}`;
-      return { key, label: `Loi ${capitalizeSentence(sujet)}` };
+      return { key, label: `${capitalizeSentence(sujet)}` };
     }
   }
 
-  // 5) si on voit "proposition de loi ..." sans motif clair, on tente de prendre la suite
   {
     const m = raw.match(/proposition de loi\s+([^.;\n]+)/i);
     if (m?.[1]) {
-      const sujet = cleanSpaces(m[1]).slice(0, 90);
+      const sujet = clampText(m[1], 180);
       const key = `loi:${normSlug(sujet)}`;
-      return { key, label: `Loi ${capitalizeSentence(sujet)}` };
+      return { key, label: `${capitalizeSentence(sujet)}` };
     }
   }
 
@@ -176,65 +487,28 @@ function inferSujetFromText(text: string): InferredSujet {
 }
 
 function getLoiKey(it: ActuItem): string {
-  // 1) vrai loi_id si dispo (id dossier / loi_id normalisé côté DB)
   if (it.loi_id) return String(it.loi_id);
 
-  // 2) inférence via texte (avec nettoyage granularité)
-  const text = `${it.title ?? ""} ${it.titre ?? ""} ${it.objet ?? ""} ${it.subtitle ?? ""} ${it.tldr ?? ""}`;
+  const text = `${it.title ?? ""} ${it.titre ?? ""} ${it.objet ?? ""} ${
+    it.subtitle ?? ""
+  } ${it.tldr ?? ""}`;
   const inferred = inferSujetFromText(text);
   if (inferred) return inferred.key;
 
-  // 3) fallback slug sur texte "long" mais stable
-  const baseTitle = stripGranularPrefix(String(it.objet ?? it.title ?? it.titre ?? "")).slice(0, 140);
+  const baseTitle = stripGranularPrefix(String(it.objet ?? it.title ?? it.titre ?? "")).slice(
+    0,
+    140
+  );
   const slug = normSlug(baseTitle);
   if (slug) return `title:${slug}`;
 
   return "no-loi";
 }
 
-function formatLoiLabel(loiKey?: string | null, items?: ActuItem[]): string | null {
-  if (!loiKey) return null;
-
-  // clés connues
-  if (loiKey === "jo-2030") return "Loi Jeux Olympiques 2030";
-
-  // finances-2026
-  if (/^finances-\d{4}$/.test(loiKey)) {
-    const year = loiKey.split("-")[1];
-    return `Loi Finances ${year}`;
-  }
-
-  // loi:...
-  if (loiKey.startsWith("loi:")) {
-    const base = loiKey.replace("loi:", "").replace(/-/g, " ");
-    return `Loi ${capitalizeSentence(base)}`;
-  }
-
-  // retenter une inférence label depuis le texte (utile pour "title:...")
-  if (items?.length) {
-    const text = `${items[0]?.title ?? ""} ${items[0]?.titre ?? ""} ${items[0]?.objet ?? ""} ${items[0]?.subtitle ?? ""} ${items[0]?.tldr ?? ""}`;
-    const inferred = inferSujetFromText(text);
-    if (inferred) return inferred.label;
-  }
-
-  // title:xxxx -> propre
-  if (loiKey.startsWith("title:")) {
-    const base = loiKey.replace("title:", "").replace(/-/g, " ");
-    return capitalizeSentence(base);
-  }
-
-  return null;
-}
-
-/* =========================
-   Group key
-========================= */
-
 export function buildGroupKey(it: ActuItem): string {
   const day = dayOf(it.date);
   const loiKey = getLoiKey(it);
 
-  // ✅ éviter mega-groupe des scrutins non rattachés
   if (it.entity === "scrutin" && loiKey === "no-loi") {
     return `scrutin|${it.id}`;
   }
@@ -244,7 +518,7 @@ export function buildGroupKey(it: ActuItem): string {
 }
 
 /* =========================
-   Display
+   Display helpers (WOW)
 ========================= */
 
 function computeSubtitle(row: GroupedActuRow): string {
@@ -254,45 +528,252 @@ function computeSubtitle(row: GroupedActuRow): string {
   if (scrutins) parts.push(`${scrutins} scrutin${scrutins > 1 ? "s" : ""}`);
   if (amendements) parts.push(`${amendements} amendement${amendements > 1 ? "s" : ""}`);
 
-  const stats = parts.length ? parts.join(" • ") : `${total} élément${total > 1 ? "s" : ""}`;
-
-  // ✅ si groupe = 1 item, on peut ajouter un micro-détail après les stats
-  if (total === 1 && row.items[0]) {
-    const it = row.items[0];
-    const hint = cleanSpaces(it.subtitle ?? it.tldr ?? it.objet ?? it.titre ?? "");
-    if (hint) return `${stats} — ${hint.slice(0, 90)}`;
-  }
-
-  return stats;
+  return parts.length ? parts.join(" • ") : `${total} élément${total > 1 ? "s" : ""}`;
 }
 
-function computeDisplayTitle(row: GroupedActuRow): string {
-  // 1️⃣ priorité absolue : sujet loi explicite
-  const loiLabel = formatLoiLabel(row.loi_id, row.items);
-  if (loiLabel) return loiLabel;
+function computeLongTitle(row: GroupedActuRow): string | undefined {
+  const first = row.items?.[0];
+  const raw = first?.objet ?? first?.titre ?? first?.title ?? first?.subtitle ?? "";
+  const cleaned = stripGranularPrefix(raw);
+  const t = cleanSpaces(cleaned);
 
-  // 2️⃣ tentative éditoriale depuis les items (avec nettoyage granularité)
-  const text = row.items
-    .map((x) =>
-      stripGranularPrefix(`${x.title ?? ""} ${x.titre ?? ""} ${x.objet ?? ""} ${x.subtitle ?? ""}`)
-    )
-    .join(" ");
+  if (!t || t.length < 45) return undefined;
+  return clampText(t, 220);
+}
 
-  const inferred = inferSujetFromText(text);
-  if (inferred?.label) return inferred.label;
+function computeHighlights(row: GroupedActuRow): string[] | undefined {
+  const items = [...(row.items ?? [])].sort((a, b) =>
+    String(b.date ?? "").localeCompare(String(a.date ?? ""))
+  );
 
-  // 3️⃣ fallback par nature (plus citoyen que "Sujet parlementaire en cours")
-  if (row.entity === "scrutin") return "Votes récents à l’Assemblée";
-  if (row.entity === "amendement") return "Amendements récents";
-  if (row.entity === "motion") return "Événements parlementaires";
-  if (row.entity === "declaration") return "Déclarations récentes";
+  const pickVoteOutcome = (txt: string) => {
+    const s = txt.toLowerCase();
+    if (s.includes("adopt")) return "Vote adopté";
+    if (s.includes("rejet") || s.includes("n'a pas adopté") || s.includes("n’a pas adopté"))
+      return "Vote rejeté";
+    return "Vote à retenir";
+  };
 
-  return "Activité parlementaire";
+  const out: string[] = [];
+
+  const phase = cleanSpaces(row.phase_label ?? "");
+  if (phase) out.push(phase);
+
+  if (row.entity === "scrutin") {
+    const t = cleanSpaces(
+      `${items[0]?.subtitle ?? ""} ${items[0]?.tldr ?? ""} ${items[0]?.objet ?? ""}`
+    );
+    out.push(pickVoteOutcome(t));
+  } else if (row.entity === "amendement") {
+    out.push(row.summary.amendements > 1 ? "Amendements examinés" : "Amendement examiné");
+  } else if (row.entity === "motion") {
+    out.push("Événement parlementaire");
+  } else if (row.entity === "declaration") {
+    out.push("Déclaration publique");
+  } else if (row.entity === "loi") {
+    out.push("Avancée du texte");
+  }
+
+  const { scrutins, amendements } = row.summary;
+  if (scrutins || amendements) {
+    const parts: string[] = [];
+    if (scrutins) parts.push(`${scrutins} vote${scrutins > 1 ? "s" : ""}`);
+    if (amendements) parts.push(`${amendements} amendement${amendements > 1 ? "s" : ""}`);
+    out.push(parts.join(" • "));
+  }
+
+  const uniq = Array.from(new Set(out.map((x) => cleanSpaces(x)).filter(Boolean)));
+  return uniq.slice(0, 3);
 }
 
 /* =========================
-   Main
+   HERO EDITORIAL (≤ 90 chars)
 ========================= */
+
+export function buildHeroEditorialTitle(input: string): string {
+  let s = cleanSpaces(input);
+
+  s = s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "");
+  const lower = s.toLowerCase();
+
+  if (/^(l['’]?\s*)?(sous-)?amendement\b/i.test(s)) {
+    const sujet = extractAmendementSujet(s);
+    if (sujet) {
+      s = sujet;
+    } else {
+      return "Modification du texte";
+    }
+  }
+
+  const isLoiSpeciale =
+    lower.includes("loi spéciale") &&
+    (lower.includes("article 45") ||
+      lower.includes("loi organique du 1er août 2001") ||
+      lower.includes("loi organique du 1 août 2001"));
+  if (isLoiSpeciale) {
+    return smartClampFR("Permettre à l’État de fonctionner sans budget voté", 90);
+  }
+
+  s = s
+    .replace(/^l['’]article\s+unique\s+(du|de la|de l['’])\s+/i, "")
+    .replace(/^article\s+unique\s+(du|de la|de l['’])\s+/i, "")
+    .replace(/\bdu\s+projet\s+de\s+loi\s+/i, "")
+    .replace(/\bde\s+la\s+proposition\s+de\s+loi\s+/i, "")
+    .replace(/^pour\s+/i, "");
+
+  s = s
+    .replace(/^l['’]ensemble\s+du\s+/i, "")
+    .replace(/^(projet|proposition)\s+de\s+loi\s+/i, "")
+    .replace(/^projet\s+de\s+loi\s+spéciale\s+/i, "")
+    .replace(/^visant\s+à\s+/i, "")
+    .replace(/^tendant\s+à\s+/i, "")
+    .replace(/^portant\s+/i, "")
+    .replace(/^relative?\s+à\s+/i, "")
+    .replace(/^relatif\s+à\s+/i, "")
+    .replace(/^sur\s+/i, "");
+
+  s = s.replace(/^d[ée]cider\s+sur\s+/i, "Décider de ");
+
+  s = s
+    .replace(/\b(sur le fondement de|au regard de|en application de)\b.*$/i, "")
+    .replace(/\b(article|articles)\s+\d+.*$/i, "")
+    .replace(/\bloi\s+n[°º]?\s*[0-9-]+.*$/i, "")
+    .replace(/\b(du|de la|des)\s+code\b.*$/i, "");
+
+  s = s
+    .replace(/\bloi\s+organique\b/gi, "règles")
+    .replace(/\btendant\s+à\s+modifier\b/gi, "pour modifier")
+    .replace(/\bles personnes\b/gi, "les personnes")
+    .replace(/\bsur le fondement\b/gi, "selon");
+
+  s = s
+    .replace(/^r[ée]paration\s+des?\s+/i, "Réparer ")
+    .replace(/^r[ée]paration\s+de\s+/i, "Réparer ")
+    .replace(
+      /autorisant\s+l['’]approbation\s+de\s+la\s+convention\s+(d['’]|de)\s+/i,
+      "Approuver la convention $1"
+    )
+    .replace(
+      /portant\s+approbation\s+de\s+la\s+convention\s+(d['’]|de)\s+/i,
+      "Approuver la convention $1"
+    )
+    .replace(/^élargissant\s+/i, "Élargir ");
+
+  s = s.split(/[.;:\n]+/)[0];
+
+  s = s
+    .replace(
+      /^reconna[iî]tre\s+le\s+pr[ée]judice\s+subi\s+par\s+/i,
+      "Reconnaître l’injustice subie par "
+    )
+    .replace(/^r[ée]parer\s+le\s+pr[ée]judice\s+subi\s+par\s+/i, "Réparer l’injustice subie par ");
+
+  s = cleanSpaces(s);
+  if (!s) return "Vote à l’Assemblée";
+
+  const low = s.toLowerCase();
+  if (low === "décider" || low === "decider" || low === "voter" || low === "vote") {
+    return "Vote à l’Assemblée";
+  }
+
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  return smartClampFR(s, 90);
+}
+
+function isWeakEditorialTitle(s: string): boolean {
+  const t = cleanSpaces(s);
+  if (!t) return true;
+  if (t.length < 12) return true;
+
+  const low = t.toLowerCase();
+  if (low === "vote à l’assemblée" || low === "vote a l’assemblee") return false;
+
+  if (low === "m" || low === "mme" || low === "m." || low === "décision" || low === "decision")
+    return true;
+  if (low === "actualité parlementaire") return true;
+
+  if (/^(m\.?|mme|monsieur|madame)\b/i.test(t)) return true;
+
+  if (
+    low.startsWith("amendement") ||
+    low.startsWith("sous-amendement") ||
+    low.startsWith("l'amendement") ||
+    low.startsWith("l’ensemble") ||
+    low.startsWith("ensemble du") ||
+    low === "modification du texte"
+  )
+    return true;
+
+  return false;
+}
+
+function buildEditorialTitleForRow(row: GroupedActuRow): string {
+  const items = row.items ?? [];
+  const first = items[0];
+
+  const officialRaw = first?.objet ?? first?.titre ?? first?.title ?? first?.subtitle ?? "";
+
+  // ✅ GARDE-FOU : scrutin + officialRaw=amendement => HERO = loi, pas amendement
+  if (row.entity === "scrutin" && officialRaw && isVoteOnAmendementFromOfficial(officialRaw)) {
+    return buildHeroTitleForScrutinWhenOfficialIsAmendement(officialRaw);
+  }
+
+  const corpus = items
+    .slice(0, 8)
+    .map((x) =>
+      stripGranularPrefix(
+        `${x.objet ?? ""} ${x.titre ?? ""} ${x.title ?? ""} ${x.subtitle ?? ""} ${x.tldr ?? ""}`
+      )
+    )
+    .join(" ");
+
+  const inferred = inferSujetFromText(corpus);
+  const sujet = inferred?.label ? cleanSpaces(inferred.label) : "";
+
+  let title = buildHeroEditorialTitle(stripGranularPrefix(officialRaw));
+
+  if (isWeakEditorialTitle(title)) {
+    const retry = buildHeroEditorialTitle(corpus);
+    if (retry && !isWeakEditorialTitle(retry)) title = retry;
+  }
+
+  if (isWeakEditorialTitle(title)) {
+    if (row.entity === "amendement") {
+      const amendSujet = extractAmendementSujet(officialRaw) ?? extractAmendementSujet(corpus);
+      if (amendSujet) {
+        title = smartClampFR(`Modifier : ${amendSujet}`, 90);
+      } else if (sujet) {
+        title = smartClampFR(`Modifier : ${sujet}`, 90);
+      } else {
+        title = "Modification du texte";
+      }
+    } else {
+      if (sujet) title = smartClampFR(`Vote : ${sujet}`, 90);
+      else title = "Vote à l’Assemblée";
+    }
+  }
+
+  const low = cleanSpaces(title).toLowerCase();
+  if (low === "décision" || low === "decision" || low === "décision importante à l’assemblée") {
+    title = "Vote important à l’Assemblée";
+  }
+
+  return smartClampFR(title, 90);
+}
+
+/** ✅ Choix de navigation par défaut pour un group */
+function defaultTargetForRow(row: GroupedActuRow): ActuTarget {
+  const newest = [...(row.items ?? [])].sort((a, b) =>
+    String(b.date ?? "").localeCompare(String(a.date ?? ""))
+  )[0];
+
+  if (row.entity === "scrutin" && newest?.id) return { kind: "scrutin", id: newest.id };
+  if (row.entity === "amendement" && newest?.id) return { kind: "amendement", id: newest.id };
+  if (row.entity === "motion" && newest?.id) return { kind: "motion", id: newest.id };
+  if (row.entity === "declaration" && newest?.id) return { kind: "declaration", id: newest.id };
+
+  return { kind: "loi", id: row.loi_id ?? "no-loi" };
+}
 
 export function groupActuItems(items: ActuItem[]): GroupedActuRow[] {
   const map = new Map<string, GroupedActuRow>();
@@ -306,12 +787,14 @@ export function groupActuItems(items: ActuItem[]): GroupedActuRow[] {
         kind: "group",
         groupKey: key,
         entity: it.entity,
-        loi_id: loiKey,
+        loi_id: loiKey, // ⚠️ loiKey (pas forcément "loi-*")
         phase_label: it.phase_label ?? null,
         day: dayOf(it.date),
         dateMax: it.date,
         items: [],
         summary: { total: 0, amendements: 0, scrutins: 0, articles: 0 },
+        primaryTarget: undefined,
+        secondaryTargets: undefined,
         display: { title: "", subtitle: "", tag: it.phase_label ?? "" },
       });
     }
@@ -330,10 +813,18 @@ export function groupActuItems(items: ActuItem[]): GroupedActuRow[] {
   const rows = Array.from(map.values());
 
   for (const row of rows) {
-    // ✅ IMPORTANT : ne pas écraser row.entity (sinon tags/icônes deviennent incohérents)
-    row.display.title = computeDisplayTitle(row);
+    row.display.longTitle = computeLongTitle(row);
+
+    // ✅ titre éditorial + micro-polish final
+    row.display.title = normalizeEditorialTitle(buildEditorialTitleForRow(row));
+
     row.display.subtitle = computeSubtitle(row);
     row.display.tag = row.phase_label ?? "";
+    row.display.highlights = computeHighlights(row);
+
+    // ✅ navigation stable
+    row.primaryTarget = defaultTargetForRow(row);
+    row.secondaryTargets = row.items.slice(0, 8).map((it) => ({ kind: it.entity, id: it.id }));
   }
 
   rows.sort((a, b) => (b.dateMax ?? "").localeCompare(a.dateMax ?? ""));

@@ -2,7 +2,7 @@
 import React, { useMemo } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { parseScrutinOutcome, outcomeToLabel } from "@/lib/parliament/scrutinResult";
-
+import { routeFromItemId } from "@/lib/routes";
 
 type VoteKey = "pour" | "contre" | "abstention" | "nv";
 type TimeBucket = "TODAY" | "WEEK" | "OLDER";
@@ -45,12 +45,9 @@ function shortResult(r?: string | null) {
   if (!raw) return "";
 
   const outcome = parseScrutinOutcome(raw);
-  const label = outcomeToLabel(outcome); // "Adoptée" | "Rejetée" | null
-
-  // si on sait parser : on renvoie le label officiel
+  const label = outcomeToLabel(outcome);
   if (label) return label;
 
-  // sinon fallback : texte brut (court)
   return raw.length > 28 ? raw.slice(0, 28) + "…" : raw;
 }
 
@@ -62,13 +59,11 @@ function votePillLabel(k: VoteKey) {
 }
 
 function votePillStyle(k: VoteKey) {
-  // pas de "theme" ici => couleurs RGBA soft premium
   if (k === "pour") return { backgroundColor: "rgba(34,197,94,0.12)", borderColor: "rgba(34,197,94,0.25)" };
   if (k === "contre") return { backgroundColor: "rgba(239,68,68,0.10)", borderColor: "rgba(239,68,68,0.22)" };
   if (k === "abstention") return { backgroundColor: "rgba(234,179,8,0.12)", borderColor: "rgba(234,179,8,0.25)" };
   return { backgroundColor: "rgba(148,163,184,0.10)", borderColor: "rgba(148,163,184,0.18)" };
 }
-
 
 export default function DeputeVotesTab({
   recentVotesLoading,
@@ -87,12 +82,7 @@ export default function DeputeVotesTab({
 
   const recap = useMemo(() => {
     const last = flat.slice(0, 6);
-    const counts: Record<VoteKey, number> = {
-      pour: 0,
-      contre: 0,
-      abstention: 0,
-      nv: 0,
-    };
+    const counts: Record<VoteKey, number> = { pour: 0, contre: 0, abstention: 0, nv: 0 };
 
     last.forEach((v) => {
       const k = normalizeVoteKey(v.vote);
@@ -100,8 +90,6 @@ export default function DeputeVotesTab({
     });
 
     const n = last.length;
-
-    // on prend la 1ère date dite "valide" (liste déjà triée côté parent)
     const latestDate = last.find((v) => !!v.date_scrutin)?.date_scrutin ?? null;
 
     return { n, counts, latestDate };
@@ -137,9 +125,7 @@ export default function DeputeVotesTab({
         <View style={styles.timelineHeaderRow}>
           <Text style={styles.subSectionTitle}>Derniers votes</Text>
           <Text style={styles.timelineHint}>
-            {recap.latestDate
-              ? `Dernier vote : ${fmtDateFR(recap.latestDate)}`
-              : `Sur ${recap.n} votes`}
+            {recap.latestDate ? `Dernier vote : ${fmtDateFR(recap.latestDate)}` : `Sur ${recap.n} votes`}
           </Text>
         </View>
 
@@ -164,10 +150,8 @@ export default function DeputeVotesTab({
 
         <Text style={[styles.paragraphSecondary, { marginTop: 8 }]}>
           Sur les {recap.n} derniers scrutins :{" "}
-          <Text style={{ color: accentColor, fontWeight: "800" }}>
-            {recap.counts.pour} pour
-          </Text>
-          , {recap.counts.contre} contre, {recap.counts.abstention} abst., {recap.counts.nv} non-votant.
+          <Text style={{ color: accentColor, fontWeight: "800" }}>{recap.counts.pour} pour</Text>,{" "}
+          {recap.counts.contre} contre, {recap.counts.abstention} abst., {recap.counts.nv} non-votant.
         </Text>
       </View>
 
@@ -198,45 +182,46 @@ export default function DeputeVotesTab({
 
                       <Pressable
                         style={({ pressed }) => [styles.timelineCard, pressed && { opacity: 0.92 }]}
-                        onPress={() => router.push(`/scrutins/${v.numero_scrutin}`)}
+                        onPress={() => {
+                          const href = routeFromItemId(String(v.numero_scrutin ?? "").trim());
+                          if (href) router.push(href as any);
+                        }}
                       >
                         <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}>
-  <Text
-    style={[styles.timelineTitleVote, { flex: 1 }]}
-    numberOfLines={2}
-    ellipsizeMode="tail"
-  >
-    {v.titre || `Scrutin n°${v.numero_scrutin}`}
-  </Text>
+                          <Text
+                            style={[styles.timelineTitleVote, { flex: 1 }]}
+                            numberOfLines={2}
+                            ellipsizeMode="tail"
+                          >
+                            {v.titre || `Scrutin n°${v.numero_scrutin}`}
+                          </Text>
 
-  {/* ✅ Badge vote */}
-  <View
-    style={[
-      {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-        borderWidth: 1,
-        alignSelf: "flex-start",
-      },
-      votePillStyle(k),
-    ]}
-  >
-    <Text
-      style={{
-        fontSize: 11,
-        fontWeight: "900",
-        color: styles?.text?.color ?? styles?.tabLabelActive?.color ?? undefined,
-        opacity: 0.92,
-        letterSpacing: 0.4,
-      }}
-      numberOfLines={1}
-    >
-      {votePillLabel(k)}
-    </Text>
-  </View>
-</View>
-
+                          <View
+                            style={[
+                              {
+                                paddingHorizontal: 10,
+                                paddingVertical: 6,
+                                borderRadius: 999,
+                                borderWidth: 1,
+                                alignSelf: "flex-start",
+                              },
+                              votePillStyle(k),
+                            ]}
+                          >
+                            <Text
+                              style={{
+                                fontSize: 11,
+                                fontWeight: "900",
+                                color: styles?.text?.color ?? styles?.tabLabelActive?.color ?? undefined,
+                                opacity: 0.92,
+                                letterSpacing: 0.4,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {votePillLabel(k)}
+                            </Text>
+                          </View>
+                        </View>
 
                         <View style={styles.timelineMetaRow}>
                           <Text style={styles.timelineMetaLeft} numberOfLines={1} ellipsizeMode="tail">

@@ -1,5 +1,7 @@
+// lib/queries/amendements.ts
 import { supabase } from "@/lib/supabaseClient";
 import type { AmendementHighlight } from "@/components/loi/AmendementsHighlights";
+import { routeFromItemId } from "@/lib/routes";
 
 export type AmendementContractRow = {
   loi_id: string;
@@ -12,12 +14,21 @@ export type AmendementContractRow = {
   author_label: string | null;
   author_group: string | null;
   preview: string | null;
-  outcome_norm: "adopte" | "rejete" | "retire" | "tombe" | "irrecevable" | "nonRenseigne";
+  outcome_norm:
+    | "adopte"
+    | "rejete"
+    | "retire"
+    | "tombe"
+    | "irrecevable"
+    | "nonRenseigne";
   outcome_label: string | null;
 };
 
-export async function fetchAmendementsByLoi(loiId: string) {
-  const safe = String(loiId || "").trim();
+/**
+ * ✅ Accepte string | null | undefined (car certains écrans passent loiId nullable)
+ */
+export async function fetchAmendementsByLoi(loiId: string | null | undefined) {
+  const safe = String(loiId ?? "").trim();
   if (!safe) return [];
 
   const { data, error } = await supabase
@@ -36,14 +47,36 @@ export async function fetchAmendementsByLoi(loiId: string) {
   return (data ?? []) as AmendementContractRow[];
 }
 
-function toneFromOutcome(outcome: AmendementContractRow["outcome_norm"]): "success" | "warn" | "mute" | "soft" {
+function toneFromOutcome(
+  outcome: AmendementContractRow["outcome_norm"]
+): "success" | "warn" | "mute" | "soft" {
   if (outcome === "adopte") return "success";
   if (outcome === "rejete" || outcome === "irrecevable") return "warn";
   if (outcome === "retire" || outcome === "tombe") return "mute";
   return "soft";
 }
 
-export function pickAmendementsHighlights(rows: AmendementContractRow[], limit = 6): AmendementHighlight[] {
+/**
+ * ✅ NAV UNIQUE:
+ * - si numero_scrutin => routeFromItemId(numero_scrutin)
+ * - sinon => undefined (PAS null) car le type attend "… | undefined"
+ */
+function buildHighlightLink(
+  r: AmendementContractRow
+): { type: "amendement" | "scrutin"; href: string } | undefined {
+  const ns = String(r.numero_scrutin ?? "").trim();
+  if (!ns) return undefined;
+
+  const href = routeFromItemId(ns);
+  if (!href) return undefined;
+
+  return { type: "scrutin", href };
+}
+
+export function pickAmendementsHighlights(
+  rows: AmendementContractRow[],
+  limit = 6
+): AmendementHighlight[] {
   const rank = (o: AmendementContractRow["outcome_norm"]) => {
     switch (o) {
       case "adopte":
@@ -81,14 +114,16 @@ export function pickAmendementsHighlights(rows: AmendementContractRow[], limit =
     const articleKey = (r.article_ref ?? "").trim();
 
     const penalty =
-      (authorKey && seenAuthor.has(authorKey) ? 1 : 0) + (articleKey && seenArticle.has(articleKey) ? 1 : 0);
+      (authorKey && seenAuthor.has(authorKey) ? 1 : 0) +
+      (articleKey && seenArticle.has(articleKey) ? 1 : 0);
 
     if (penalty >= 2 && sorted.length > limit + 2) continue;
 
     out.push({
       id: r.amendement_uid,
       title: (r.titre ?? r.amendement_uid).trim(),
-      subtitle: [r.article_ref, r.context_label].filter(Boolean).join(" — ") || "Amendement",
+      subtitle:
+        [r.article_ref, r.context_label].filter(Boolean).join(" — ") || "Amendement",
       outcome: r.outcome_norm,
       outcomeLabel: r.outcome_label ?? "Non renseigné",
       tone: toneFromOutcome(r.outcome_norm),
@@ -97,9 +132,7 @@ export function pickAmendementsHighlights(rows: AmendementContractRow[], limit =
       authorLabel: r.author_label ?? undefined,
       authorGroup: r.author_group ?? undefined,
       preview: r.preview ?? undefined,
-      link: r.numero_scrutin
-        ? { type: "scrutin", href: `/scrutins/${encodeURIComponent(String(r.numero_scrutin))}` }
-        : { type: "amendement", href: `/amendements/${encodeURIComponent(r.amendement_uid)}` },
+      link: buildHighlightLink(r), // ✅ undefined OK
     });
 
     if (authorKey) seenAuthor.add(authorKey);
@@ -115,7 +148,8 @@ export function pickAmendementsHighlights(rows: AmendementContractRow[], limit =
       out.push({
         id: r.amendement_uid,
         title: (r.titre ?? r.amendement_uid).trim(),
-        subtitle: [r.article_ref, r.context_label].filter(Boolean).join(" — ") || "Amendement",
+        subtitle:
+          [r.article_ref, r.context_label].filter(Boolean).join(" — ") || "Amendement",
         outcome: r.outcome_norm,
         outcomeLabel: r.outcome_label ?? "Non renseigné",
         tone: toneFromOutcome(r.outcome_norm),
@@ -124,9 +158,7 @@ export function pickAmendementsHighlights(rows: AmendementContractRow[], limit =
         authorLabel: r.author_label ?? undefined,
         authorGroup: r.author_group ?? undefined,
         preview: r.preview ?? undefined,
-        link: r.numero_scrutin
-          ? { type: "scrutin", href: `/scrutins/${encodeURIComponent(String(r.numero_scrutin))}` }
-          : { type: "amendement", href: `/amendements/${encodeURIComponent(r.amendement_uid)}` },
+        link: buildHighlightLink(r), // ✅ undefined OK
       });
     }
   }

@@ -10,6 +10,7 @@ import {
   Text,
   View,
   Pressable,
+  LayoutChangeEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { theme } from "../../../../lib/theme";
@@ -31,6 +32,7 @@ import {
   fetchVotesGroupesByScrutin,
   type VoteGroupePositionRow,
   type LoiTimelineRow,
+  resolveGroupKeyFromAnyId,
 } from "../../../../lib/queries/lois";
 
 import { parseScrutinOutcome, outcomeToLabel } from "@/lib/parliament/scrutinResult";
@@ -44,8 +46,8 @@ import {
   type AmendementHighlight,
 } from "@/components/loi/AmendementsHighlights";
 import { fetchAmendementsByLoi, pickAmendementsHighlights } from "@/lib/queries/amendements";
-import { resolveGroupKeyFromAnyId } from "@/lib/queries/lois";
 
+// ✅ Route unique (anti erreurs de navigation)
 import { routeFromItemId } from "@/lib/routes";
 
 // ✅ (optionnel) un seul log, après tous les imports
@@ -54,7 +56,14 @@ console.log("[LOI FILE LOADED] app/(tabs)/lois/[id]/index.tsx");
 const colors = theme.colors;
 const BORDER = (colors as any)?.border ?? "rgba(255,255,255,0.10)";
 
-type RouteParams = { id?: string };
+type RouteParams = {
+  id?: string;
+
+  // ✅ contexte (optionnel) : pour une navigation “récit → preuve → retour”
+  fromKey?: string;
+  fromLabel?: string;
+  anchor?: "timeline" | "vote" | "groups" | "amendements" | "impact";
+};
 
 type LoiRow = {
   loi_id: string;
@@ -107,15 +116,6 @@ function norm(s?: string | null) {
 
 function includesAny(hay: string, needles: string[]) {
   return needles.some((n) => hay.includes(n));
-}
-
-// ✅ (legacy) robuste: reconnaît amendements + sous-amendements + variantes
-function isAmendementLikeKind(kind?: string | null) {
-  const k = (kind ?? "").toLowerCase().trim();
-  if (!k) return false;
-  if (k.includes("amend")) return true;
-  if (k.includes("sous") && k.includes("amend")) return true;
-  return false;
 }
 
 // ✅ Détection robuste : kind + objet/titre (car kind peut être "autre")
@@ -564,7 +564,11 @@ function scopeBadgesFromContext(loiId: string, title: string, timeline: Timeline
     textAll.includes("proposition de loi")
   ) {
     push({ label: "PPL", tone: "soft" });
-  } else if (id.includes("projet-de-loi") || t.includes("projet de loi") || textAll.includes("projet de loi")) {
+  } else if (
+    id.includes("projet-de-loi") ||
+    t.includes("projet de loi") ||
+    textAll.includes("projet de loi")
+  ) {
     push({ label: "Projet", tone: "soft" });
   }
 
@@ -650,6 +654,7 @@ function toneTextStyles(tone?: "success" | "warn" | "soft") {
 // ----------------- Screen -----------------
 export default function LoiDetailScreen() {
   const router = useRouter();
+  const scrollRef = React.useRef<ScrollView>(null);
 
   // ✅ Normalisation robuste du param id (string | string[] | undefined)
   const params = useLocalSearchParams<RouteParams>();
@@ -660,6 +665,10 @@ export default function LoiDetailScreen() {
     return "";
   }, [rawId]);
 
+  const fromKey = useMemo(() => String((params as any)?.fromKey ?? "").trim() || null, [params]);
+  const fromLabel = useMemo(() => String((params as any)?.fromLabel ?? "").trim() || null, [params]);
+  const anchor = useMemo(() => String((params as any)?.anchor ?? "").trim() || null, [params]);
+
   console.log("[LOI SCREEN] id param =", idStr);
 
   // ✅ AIRBAG NAV: si on arrive ici avec un "scrutin-*", on redirige direct vers fiche Scrutin
@@ -667,7 +676,7 @@ export default function LoiDetailScreen() {
 
   useEffect(() => {
     if (!isScrutinId) return;
-    router.replace(`/scrutins/${encodeURIComponent(idStr)}` as any);
+    router.replace(routeFromItemId(idStr) as any);
   }, [idStr, isScrutinId, router]);
 
   const [loi, setLoi] = useState<LoiRow | null>(null);
@@ -696,6 +705,41 @@ export default function LoiDetailScreen() {
     return x.startsWith("scrutin-") || x.includes("scrutin");
   }, [loiId]);
 
+  // ✅ Anchors (scroll to section)
+  const [anchorY, setAnchorY] = useState<Record<string, number>>({});
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
+
+  const setAnchor = (key: string) => (e: LayoutChangeEvent) => {
+    const y = e?.nativeEvent?.layout?.y ?? 0;
+    setAnchorY((m) => ({ ...m, [key]: y }));
+  };
+
+  const scrollToAnchor = (key: string) => {
+    const y = anchorY[key];
+    if (typeof y !== "number") return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
+  };
+
+  useEffect(() => {
+    if (!anchor) return;
+    if (typeof anchorY[anchor] !== "number") {
+      setPendingAnchor(anchor);
+      return;
+    }
+    scrollToAnchor(anchor);
+    setPendingAnchor(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anchor, anchorY]);
+
+  useEffect(() => {
+    if (!pendingAnchor) return;
+    if (typeof anchorY[pendingAnchor] === "number") {
+      scrollToAnchor(pendingAnchor);
+      setPendingAnchor(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAnchor, anchorY]);
+
   const runLoad = React.useCallback(async () => {
     if (!loiId) {
       setNotFound(true);
@@ -710,7 +754,6 @@ export default function LoiDetailScreen() {
 
     try {
       console.log("[LOI LOAD] start", { loiId });
-      console.log("[LOI LOAD] before fetchLoiDetail");
 
       const loiRow = (await fetchLoiDetail(loiId)) as unknown as LoiRow;
       console.log("[LOI LOAD] detail ok", { loi_id: (loiRow as any)?.loi_id });
@@ -730,32 +773,19 @@ export default function LoiDetailScreen() {
 
       // ✅ TIMELINE : clé robuste (loi_id canon OU group_key résolu)
       const rawKey = String((loiRow as any)?.loi_id ?? loiId).trim();
-      console.log("[LOI LOAD] timelineKey try raw", rawKey);
-
       let timelineKey = rawKey;
 
       // si on est sur un agrégateur "scrutin-*", la timeline est indexée par group_key
       if (timelineKey.startsWith("scrutin-")) {
         try {
           const gk = await resolveGroupKeyFromAnyId(timelineKey);
-          if (gk) {
-            console.log("[LOI LOAD] timelineKey resolved group_key", gk);
-            timelineKey = gk;
-          } else {
-            console.log("[LOI LOAD] timelineKey group_key NOT FOUND for", timelineKey);
-          }
+          if (gk) timelineKey = gk;
         } catch (e) {
           console.warn("[LOI LOAD] timelineKey resolveGroupKey error", e);
         }
       }
 
-      console.log("[LOI LOAD] before fetchLoiTimeline", { timelineKey });
       const tl = (await fetchLoiTimeline(timelineKey, 250)) as unknown as TimelineRow[];
-      console.log("[LOI LOAD] after fetchLoiTimeline", {
-        count: Array.isArray(tl) ? tl.length : -1,
-        timelineKey,
-      });
-
       const tlSafe = Array.isArray(tl) ? tl : [];
       const tlSorted = [...tlSafe].sort((a, b) => {
         const da = a.date_scrutin ? new Date(a.date_scrutin).getTime() : 0;
@@ -782,7 +812,6 @@ export default function LoiDetailScreen() {
       setReferenceKind(null);
       setError(userMessageFromError(e));
     } finally {
-      console.log("[LOI LOAD] finally");
       setLoading(false);
     }
   }, [loiId]);
@@ -791,14 +820,8 @@ export default function LoiDetailScreen() {
     // ✅ si c’est un scrutin-* on redirige, donc on ne charge pas cette page
     if (!loiId) return;
     if (isScrutinId) return;
-
-    console.log("[LOI EFFECT] calling runLoad", { loiId });
     runLoad();
   }, [loiId, runLoad, isScrutinId]);
-
-  useEffect(() => {
-    console.log("[LOI] loading changed", loading);
-  }, [loading]);
 
   useEffect(() => {
     let alive = true;
@@ -806,7 +829,6 @@ export default function LoiDetailScreen() {
     (async () => {
       try {
         if (!loiId) return;
-
         const rows = (await fetchAmendementsByLoi(String(loiId))) ?? [];
         if (!alive) return;
 
@@ -916,15 +938,6 @@ export default function LoiDetailScreen() {
     const baseTitle = (loi.titre_loi ?? "").trim() || `Loi ${String(loiId)}`;
 
     const voteTotals = sumVotesFromGroups(groupVotes);
-
-    console.log("[REF SCRUTIN]", {
-      numero: referenceScrutin?.numero_scrutin,
-      date: referenceScrutin?.date_scrutin,
-      resultat: referenceScrutin?.resultat,
-      objet: referenceScrutin?.objet,
-      kind: referenceScrutin?.kind,
-      voteTotals,
-    });
 
     const hasTotals =
       (voteTotals.pour ?? 0) + (voteTotals.contre ?? 0) + (voteTotals.abstention ?? 0) > 0;
@@ -1097,7 +1110,27 @@ export default function LoiDetailScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
+        {/* ✅ context bar (optionnel) */}
+        {fromKey ? (
+          <View style={styles.contextBar}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.contextKicker}>Tu viens de</Text>
+              <Text style={styles.contextTitle} numberOfLines={1}>
+                {fromLabel ?? "un récit"}
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={() => router.back()}
+              style={styles.contextBtn}
+              android_ripple={{ color: "rgba(255,255,255,0.06)" }}
+            >
+              <Text style={styles.contextBtnText}>← Retour</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         <FadeInUp delay={0}>
           <LoiHero m={model} />
         </FadeInUp>
@@ -1130,7 +1163,8 @@ export default function LoiDetailScreen() {
 
             {isScrutinBacked ? (
               <Text style={styles.scopeFoot}>
-                Une loi peut être examinée par étapes (article liminaire, première partie, CMP…). Ici, nous rendons explicite le périmètre réel du vote affiché.
+                Une loi peut être examinée par étapes (article liminaire, première partie, CMP…). Ici, nous rendons
+                explicite le périmètre réel du vote affiché.
               </Text>
             ) : null}
           </View>
@@ -1145,57 +1179,69 @@ export default function LoiDetailScreen() {
             <View style={styles.noteCard}>
               <Text style={styles.noteTitle}>Contexte</Text>
               <Text style={styles.noteText}>
-                Cette page agrège plusieurs scrutins liés à un même sujet. Les chiffres “Résultat du scrutin de référence”
-                et “Position des groupes” sont calculés à partir d’un scrutin choisi comme référence.
+                Cette page agrège plusieurs scrutins liés à un même sujet. Les chiffres “Résultat du scrutin de
+                référence” et “Position des groupes” sont calculés à partir d’un scrutin choisi comme référence.
                 {refKindUX ? ` Scrutin de référence : ${refKindUX}.` : ""}
               </Text>
             </View>
           </FadeInUp>
         )}
 
-        <FadeInUp delay={120}>
-          <LoiTimeline
-            m={model}
-            onStepPress={(scrutinId) => {
-              const sid = (scrutinId ?? "").trim();
-              if (!sid) return;
-              router.push(`/scrutins/${encodeURIComponent(sid)}`);
-            }}
-            onSeeAll={() => {
-              if (!loiId) return;
-              router.push(`/(tabs)/lois/${encodeURIComponent(String(loiId))}/timeline`);
-            }}
-          />
-        </FadeInUp>
+        {/* ✅ ANCHOR: timeline */}
+        <View onLayout={setAnchor("timeline")}>
+          <FadeInUp delay={120}>
+            <LoiTimeline
+              m={model}
+              onStepPress={(scrutinId) => {
+                const sid = (scrutinId ?? "").trim();
+                if (!sid) return;
+                router.push(routeFromItemId(sid) as any);
+              }}
+              onSeeAll={() => {
+                if (!loiId) return;
+                router.push({
+                  pathname: "/(tabs)/lois/[id]/timeline",
+                  params: { id: String(loiId) },
+                } as any);
+              }}
+            />
+          </FadeInUp>
+        </View>
 
-        <FadeInUp delay={180}>
-          <LoiVoteResult m={model} />
-        </FadeInUp>
+        {/* ✅ ANCHOR: vote */}
+        <View onLayout={setAnchor("vote")}>
+          <FadeInUp delay={180}>
+            <LoiVoteResult m={model} />
+          </FadeInUp>
+        </View>
 
-        <FadeInUp delay={240}>
-          <LoiGroupVotes
-            m={model}
-            onGroupPress={(groupLabel) => {
-              const key = (groupLabel ?? "").trim();
-              if (!key || !loiId) return;
+        {/* ✅ ANCHOR: groups */}
+        <View onLayout={setAnchor("groups")}>
+          <FadeInUp delay={240}>
+            <LoiGroupVotes
+              m={model}
+              onGroupPress={(groupLabel) => {
+                const key = (groupLabel ?? "").trim();
+                if (!key || !loiId) return;
 
-              const hit = groupRoutingIndex[key];
-              if (!hit?.groupe_norm) return;
+                const hit = groupRoutingIndex[key];
+                if (!hit?.groupe_norm) return;
 
-              const lastScrutinId = referenceScrutinId ? String(referenceScrutinId) : null;
+                const lastScrutinId = referenceScrutinId ? String(referenceScrutinId) : null;
 
-              router.push({
-                pathname: `/(tabs)/lois/${encodeURIComponent(String(loiId))}/groupes/${encodeURIComponent(
-                  hit.groupe_norm
-                )}/deputes`,
-                params: {
-                  ...(lastScrutinId ? { vs: lastScrutinId } : {}),
-                  ...(hit.groupe_label ? { groupe_label: hit.groupe_label } : {}),
-                },
-              });
-            }}
-          />
-        </FadeInUp>
+                router.push({
+                  pathname: `/(tabs)/lois/${encodeURIComponent(String(loiId))}/groupes/${encodeURIComponent(
+                    hit.groupe_norm
+                  )}/deputes`,
+                  params: {
+                    ...(lastScrutinId ? { vs: lastScrutinId } : {}),
+                    ...(hit.groupe_label ? { groupe_label: hit.groupe_label } : {}),
+                  },
+                } as any);
+              }}
+            />
+          </FadeInUp>
+        </View>
 
         <FadeInUp delay={300}>
           <View style={styles.foldCard}>
@@ -1231,61 +1277,77 @@ export default function LoiDetailScreen() {
           items={amendHighlights}
           totalCount={amendTotal}
           onPressItem={(it) => {
-            if (it.link?.href) router.push(it.link.href);
+            const href = (it as any)?.link?.href ? String((it as any).link.href) : "";
+            if (!href) return;
+
+            // ✅ Si c'est un id item (scrutin-* / loi-*), on passe par la route canon
+            if (href.startsWith("scrutin-") || href.startsWith("loi-")) {
+              router.push(routeFromItemId(href) as any);
+              return;
+            }
+
+            // ✅ Sinon on accepte une URL interne déjà prête
+            router.push(href as any);
           }}
         />
 
-        <FadeInUp delay={420}>
-          <View style={styles.foldCard}>
-            <SectionToggle
-              title="Amendements & sous-amendements"
-              subtitle={amendementsSubtitle}
-              open={showAmendements}
-              onToggle={() => setShowAmendements((v) => !v)}
-            />
+        {/* ✅ ANCHOR: amendements */}
+        <View onLayout={setAnchor("amendements")}>
+          <FadeInUp delay={420}>
+            <View style={styles.foldCard}>
+              <SectionToggle
+                title="Amendements & sous-amendements"
+                subtitle={amendementsSubtitle}
+                open={showAmendements}
+                onToggle={() => setShowAmendements((v) => !v)}
+              />
 
-            {showAmendements ? (
-              <View style={{ paddingTop: 8 }}>
-                {(amendementsUI?.length ?? 0) === 0 ? (
-                  <Text style={styles.politicalText}>Aucun amendement n’apparaît dans l’aperçu actuel.</Text>
-                ) : (
-                  amendementsUI.map((a, idx) => (
-                    <Pressable
-                      key={`${a.scrutinId ?? "x"}-${idx}`}
-                      onPress={() => {
-                        const sid = (a.scrutinId ?? "").trim();
-                        if (!sid) return;
-                        router.push(`/scrutins/${encodeURIComponent(sid)}`);
-                      }}
-                      style={{
-                        paddingVertical: 10,
-                        borderTopWidth: idx === 0 ? 0 : 1,
-                        borderTopColor: BORDER,
-                      }}
-                    >
-                      <Text style={{ color: colors.text, fontWeight: "800", fontSize: 13 }}>{a.title}</Text>
-                      <Text style={{ color: colors.subtext, marginTop: 3, fontSize: 12 }}>
-                        {a.date} • {a.description}
-                      </Text>
-                    </Pressable>
-                  ))
-                )}
-              </View>
-            ) : null}
-          </View>
-        </FadeInUp>
+              {showAmendements ? (
+                <View style={{ paddingTop: 8 }}>
+                  {(amendementsUI?.length ?? 0) === 0 ? (
+                    <Text style={styles.politicalText}>Aucun amendement n’apparaît dans l’aperçu actuel.</Text>
+                  ) : (
+                    amendementsUI.map((a, idx) => (
+                      <Pressable
+                        key={`${a.scrutinId ?? "x"}-${idx}`}
+                        onPress={() => {
+                          const sid = (a.scrutinId ?? "").trim();
+                          if (!sid) return;
+                          router.push(routeFromItemId(sid) as any);
+                        }}
+                        style={{
+                          paddingVertical: 10,
+                          borderTopWidth: idx === 0 ? 0 : 1,
+                          borderTopColor: BORDER,
+                        }}
+                      >
+                        <Text style={{ color: colors.text, fontWeight: "800", fontSize: 13 }}>{a.title}</Text>
+                        <Text style={{ color: colors.subtext, marginTop: 3, fontSize: 12 }}>
+                          {a.date} • {a.description}
+                        </Text>
+                      </Pressable>
+                    ))
+                  )}
+                </View>
+              ) : null}
+            </View>
+          </FadeInUp>
+        </View>
 
-        <FadeInUp delay={480}>
-          <View style={styles.foldCard}>
-            <SectionToggle
-              title="Détails"
-              subtitle="Informations techniques"
-              open={showImpact}
-              onToggle={() => setShowImpact((v) => !v)}
-            />
-            {showImpact ? <LoiImpact m={model} /> : null}
-          </View>
-        </FadeInUp>
+        {/* ✅ ANCHOR: impact */}
+        <View onLayout={setAnchor("impact")}>
+          <FadeInUp delay={480}>
+            <View style={styles.foldCard}>
+              <SectionToggle
+                title="Détails"
+                subtitle="Informations techniques"
+                open={showImpact}
+                onToggle={() => setShowImpact((v) => !v)}
+              />
+              {showImpact ? <LoiImpact m={model} /> : null}
+            </View>
+          </FadeInUp>
+        </View>
 
         {isScrutinBacked && (
           <FadeInUp delay={540}>
@@ -1328,6 +1390,29 @@ const styles = StyleSheet.create({
 
   linkBtn: { marginTop: 10, paddingHorizontal: 10, paddingVertical: 8 },
   linkText: { color: colors.subtext, fontSize: 12, fontWeight: "800" },
+
+  // ✅ Context bar (récit → preuve)
+  contextBar: {
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  contextKicker: { color: colors.subtext, fontSize: 11, fontWeight: "900" },
+  contextTitle: { color: colors.text, fontSize: 13, fontWeight: "900", marginTop: 2 },
+  contextBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  contextBtnText: { color: colors.text, fontSize: 12, fontWeight: "900" },
 
   foldCard: {
     backgroundColor: colors.card,

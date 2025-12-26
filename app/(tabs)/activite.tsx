@@ -1,8 +1,8 @@
-// app/(tabs)/activite/index.tsx
+// app/(tabs)/activite.tsx
 import { useRouter } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import * as React from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabaseClient";
 import { theme } from "../../lib/theme";
+import { routeFromItemId } from "@/lib/routes";
 
 const colors = theme.colors;
 
@@ -67,10 +68,7 @@ function TabPill({
   return (
     <Pressable
       onPress={onPress}
-      style={[
-        styles.tabPill,
-        active ? styles.tabPillOn : styles.tabPillOff,
-      ]}
+      style={[styles.tabPill, active ? styles.tabPillOn : styles.tabPillOff]}
     >
       <Text style={[styles.tabPillText, active ? styles.tabPillTextOn : styles.tabPillTextOff]}>
         {label}
@@ -78,7 +76,12 @@ function TabPill({
 
       {typeof count === "number" ? (
         <View style={[styles.tabCount, active ? styles.tabCountOn : styles.tabCountOff]}>
-          <Text style={[styles.tabCountText, active ? styles.tabCountTextOn : styles.tabCountTextOff]}>
+          <Text
+            style={[
+              styles.tabCountText,
+              active ? styles.tabCountTextOn : styles.tabCountTextOff,
+            ]}
+          >
             {count}
           </Text>
         </View>
@@ -148,9 +151,12 @@ export default function ActiviteIndexScreen() {
         <Pressable
           style={styles.card}
           onPress={() => {
-            // Pour V1 : on garde la navigation vers la fiche loi
-            // (même pour les événements, c’est OK temporairement)
-            router.push(`/lois/${item.loi_id}`);
+            // ✅ navigation robuste (anti "scrutin-* -> fiche loi")
+            const target = String(item.loi_id ?? "");
+            if (!target) return;
+            const href = routeFromItemId(target);
+if (!href) return;
+router.push(href as any);
           }}
           android_ripple={{ color: "rgba(255,255,255,0.06)" }}
         >
@@ -175,14 +181,16 @@ export default function ActiviteIndexScreen() {
           </Text>
 
           <View style={styles.ctaRow}>
-            <Text style={styles.ctaText}>
-              {isEvent ? "Voir le vote →" : "Comprendre →"}
-            </Text>
+            <Text style={styles.ctaText}>{isEvent ? "Voir le vote →" : "Comprendre →"}</Text>
           </View>
+
+          {loading ? (
+            <Text style={[styles.meta, { marginTop: 6 }]}>Chargement…</Text>
+          ) : null}
         </Pressable>
       );
     },
-    [router]
+    [router, loading]
   );
 
   const hasQuery = q.trim().length > 0;
@@ -205,38 +213,38 @@ export default function ActiviteIndexScreen() {
         />
 
         <View style={styles.tabsRow}>
-          <TabPill label="Lois" active={tab === "lois"} onPress={() => setTab("lois")} count={hasQuery ? loisCount : undefined} />
-          <TabPill label="Événements" active={tab === "evenements"} onPress={() => setTab("evenements")} count={hasQuery ? eventsCount : undefined} />
+          <TabPill
+            label="Lois"
+            active={tab === "lois"}
+            onPress={() => setTab("lois")}
+            count={hasQuery ? loisCount : undefined}
+          />
+          <TabPill
+            label="Événements"
+            active={tab === "evenements"}
+            onPress={() => setTab("evenements")}
+            count={hasQuery ? eventsCount : undefined}
+          />
         </View>
 
-        {hasQuery && loading ? (
-          <Text style={styles.hint}>Recherche…</Text>
-        ) : null}
-
-        {hasQuery && error ? (
-          <Text style={[styles.hint, { color: colors.danger }]}>{error}</Text>
-        ) : null}
+        {hasQuery && loading ? <Text style={styles.hint}>Recherche…</Text> : null}
+        {hasQuery && error ? <Text style={[styles.hint, { color: colors.danger }]}>{error}</Text> : null}
       </View>
 
       <FlatList
         data={filtered}
-        keyExtractor={(it) => it.loi_id}
+        keyExtractor={(it) => String(it.loi_id)}
         renderItem={renderItem}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           showEmpty ? (
             <View style={{ padding: 16 }}>
               <Text style={{ color: colors.subtext }}>
-                {hasQuery
-                  ? "Aucun résultat dans cet onglet."
-                  : "Tape une recherche pour afficher l’activité."}
+                {hasQuery ? "Aucun résultat dans cet onglet." : "Tape une recherche pour afficher l’activité."}
               </Text>
 
               {hasQuery ? (
-                <Pressable
-                  style={[styles.badge, { marginTop: 12 }]}
-                  onPress={() => setQ("")}
-                >
+                <Pressable style={[styles.badge, { marginTop: 12 }]} onPress={() => setQ("")}>
                   <Text style={styles.badgeText}>Effacer la recherche</Text>
                 </Pressable>
               ) : null}

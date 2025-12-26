@@ -15,8 +15,6 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { supabase } from "../../../lib/supabaseClient";
 import { theme } from "../../../lib/theme";
 import { routeFromItemId } from "@/lib/routes";
-import { DB_VIEWS } from "@/lib/dbContract";
-
 
 const colors = theme.colors;
 
@@ -701,7 +699,8 @@ function compactActionLabel(s: string) {
   if (t.includes("premiere partie") || t.includes("1ere partie")) return "1ère partie";
   if (t.includes("seconde partie") || t.includes("2e partie") || t.includes("deuxieme partie"))
     return "2e partie";
-  if (t.includes("seconde deliberation") || t.includes("seconde délibération")) return "2e délibération";
+  if (t.includes("seconde deliberation") || t.includes("seconde délibération"))
+    return "2e délibération";
   if (t.includes("commission mixte paritaire") || t.includes("cmp")) return "Commission mixte (CMP)";
   return "Vote (détail)";
 }
@@ -723,20 +722,57 @@ function inferThemeKey(loi_id: string, title: string): ThemeKey {
   const id = (loi_id ?? "").toLowerCase();
   const t = (title ?? "").toLowerCase();
 
-  if (id.includes("finances") || t.includes("finances") || t.includes("budget") || t.includes("fisc")) return "finances";
-  if (t.includes("justice") || t.includes("pénal") || t.includes("penal") || t.includes("procédure") || t.includes("tribunal"))
+  if (id.includes("finances") || t.includes("finances") || t.includes("budget") || t.includes("fisc"))
+    return "finances";
+  if (
+    t.includes("justice") ||
+    t.includes("pénal") ||
+    t.includes("penal") ||
+    t.includes("procédure") ||
+    t.includes("tribunal")
+  )
     return "justice";
-  if (t.includes("santé") || t.includes("sante") || t.includes("hôpital") || t.includes("hopital") || t.includes("médic"))
+  if (
+    t.includes("santé") ||
+    t.includes("sante") ||
+    t.includes("hôpital") ||
+    t.includes("hopital") ||
+    t.includes("médic")
+  )
     return "sante";
-  if (t.includes("écologie") || t.includes("ecologie") || t.includes("climat") || t.includes("environnement"))
+  if (
+    t.includes("écologie") ||
+    t.includes("ecologie") ||
+    t.includes("climat") ||
+    t.includes("environnement")
+  )
     return "ecologie";
-  if (t.includes("éducation") || t.includes("education") || t.includes("école") || t.includes("ecole") || t.includes("universit"))
+  if (
+    t.includes("éducation") ||
+    t.includes("education") ||
+    t.includes("école") ||
+    t.includes("ecole") ||
+    t.includes("universit")
+  )
     return "education";
   if (t.includes("transport") || t.includes("train") || t.includes("route") || t.includes("mobilit"))
     return "transport";
-  if (t.includes("numérique") || t.includes("numerique") || t.includes("données") || t.includes("donnees") || t.includes("ia") || t.includes("cyber"))
+  if (
+    t.includes("numérique") ||
+    t.includes("numerique") ||
+    t.includes("données") ||
+    t.includes("donnees") ||
+    t.includes("ia") ||
+    t.includes("cyber")
+  )
     return "numerique";
-  if (t.includes("travail") || t.includes("emploi") || t.includes("retraite") || t.includes("logement") || t.includes("pouvoir d'achat"))
+  if (
+    t.includes("travail") ||
+    t.includes("emploi") ||
+    t.includes("retraite") ||
+    t.includes("logement") ||
+    t.includes("pouvoir d'achat")
+  )
     return "social";
   if (t.includes("sécurité") || t.includes("securite") || t.includes("terror") || t.includes("police"))
     return "securite";
@@ -770,18 +806,21 @@ function themeToVisual(themeKey: ThemeKey) {
   }
 }
 
-// ✅ navigation robuste : scrutin-* => /scrutins/... ; sinon routeFromItemId(...)
+/**
+ * ✅ NAV UNIQUE (canon)
+ * routeFromItemId() renvoie:
+ * - /scrutins/... si scrutin-*
+ * - /lois/... si loi-*
+ * - null sinon (pas de guess)
+ */
 function pushItem(router: ReturnType<typeof useRouter>, itemId: string) {
   const id = String(itemId || "").trim();
   if (!id) return;
 
-  if (id.startsWith("scrutin-")) {
-    router.push(`/scrutins/${encodeURIComponent(id)}` as any);
-    return;
-  }
-
   const href = routeFromItemId(id);
-  if (href) router.push(href as any);
+  if (href) {
+    router.push(href as any);
+  }
 }
 
 export default function LoisIndexScreen() {
@@ -919,7 +958,7 @@ export default function LoisIndexScreen() {
         if (loiIds.length > 0) {
           try {
             const { data: md, error: me } = await supabase
-              .from(DB_VIEWS.LOIS_MAPPING)
+              .from("lois_mapping_best")
               .select("loi_id,id_dossier,confiance,source")
               .in("loi_id", loiIds);
 
@@ -988,7 +1027,7 @@ export default function LoisIndexScreen() {
         // ✅ (A) Charger feed canonique
         try {
           const { data: canonData, error: canonErr } = await supabase
-            .from((DB_VIEWS as any).LOIS_CANON_FEED ?? "lois_canon_feed_v2_canon")
+            .from("lois_canon_feed_v2_canon")
             .select("loi_canon_id,leader_item_id,leader_date,leader_titre,macro_score")
             .order("leader_date", { ascending: false })
             .limit(250);
@@ -1199,7 +1238,7 @@ export default function LoisIndexScreen() {
   }, [hasQuery, raw, searchRows, canonRaw]);
 
   const screenTitle = tab === "evenements" ? "Événements" : "Lois";
-  const searchPlaceholder = "Chercher une loi…";
+  const searchPlaceholder = tab === "evenements" ? "Chercher un événement…" : "Chercher une loi…";
 
   const dataToRender: LoiListItem[] = useMemo(() => {
     const accept = (loi_id: string, title: string) => {
@@ -1315,12 +1354,12 @@ export default function LoisIndexScreen() {
       const themeKey = inferThemeKey(item.loi_id, displayTitle);
       const visual = themeToVisual(themeKey);
 
-      // ✅ FIX: routeForItemId -> routeFromItemId + scrutin-* => /scrutins/...
+      // ✅ NAV : leader_item_id si présent sinon loi_id, via pushItem() (canon)
       const onOpen = () => {
-  const leader = (item.leader_item_id ?? "").trim();
-  const target = leader || item.loi_id;
-  router.push(routeFromItemId(target));
-};
+        const leader = (item.leader_item_id ?? "").trim();
+        const target = leader || item.loi_id;
+        pushItem(router, target);
+      };
 
       return (
         <Pressable
@@ -1471,6 +1510,7 @@ export default function LoisIndexScreen() {
         keyExtractor={(it) => it.loi_id}
         renderItem={renderItem}
         contentContainerStyle={styles.list}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
         refreshing={!q.trim() ? refreshing : false}
         onRefresh={!q.trim() ? onRefresh : undefined}
         ListEmptyComponent={
@@ -1567,7 +1607,7 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: 16,
     paddingBottom: 24,
-    gap: 10,
+    paddingTop: 2,
   },
 
   card: {

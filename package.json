@@ -15,7 +15,8 @@
     "sync:deputes": "node ingestion/sync_deputes.js",
     "sync:votes:l17": "node ingestion/votes/fetch_votes_from_opendata.js 17",
     "sync:daily:l17": "node ingestion/sync_daily_17.js",
-    "ai:resumes": "node ingestion/generate_resumes_lois.js"
+    "ai:resumes": "node ingestion/generate_resumes_lois.js",
+    "postinstall": "npx expo-router install"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

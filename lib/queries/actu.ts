@@ -1,5 +1,6 @@
 // lib/queries/actu.ts
 import { supabase } from "@/lib/supabaseClient";
+import { routeFromItemId } from "@/lib/routes";
 
 export type Entity = "scrutin" | "loi" | "amendement" | "motion" | "declaration";
 
@@ -8,19 +9,39 @@ export type ActuItem = {
   entity: Entity;
   type?: string;
 
+  /** ✅ IMPORTANT: doit être un "loi_id canon" quand possible (pas un scrutin-1234) */
   loi_id?: string | null;
+
+  /** champs utiles pour tes heuristiques UI (kicker amendement, etc.) */
   article_ref?: string | null;
   date: string; // ISO
   phase_label?: string | null;
 
-  // texte
+  /** texte (UI) */
   title?: string | null;
   subtitle?: string | null;
   tldr?: string | null;
 
-  // navigation
+  /** ✅ alias “raw” (car ton code lit parfois .titre/.objet) */
+  titre?: string | null;
+  objet?: string | null;
+  resultat?: string | null;
+  numero_scrutin?: string | null;
+
+  /** navigation (optionnelle) */
   route?: { href?: string | null } | null;
 };
+
+const DEBUG_ACTU =
+  (typeof process !== "undefined" &&
+    (process as any)?.env?.EXPO_PUBLIC_ACTU_DEBUG === "1") ||
+  false;
+
+function dlog(...args: any[]) {
+  if (!DEBUG_ACTU) return;
+  // eslint-disable-next-line no-console
+  console.log(...args);
+}
 
 function asISO(d: any): string {
   if (!d) return new Date().toISOString();
@@ -35,97 +56,208 @@ function safeStr(x: any): string | null {
   return s ? s : null;
 }
 
+function short(s: any, max = 90) {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length <= max ? t : t.slice(0, max) + "…";
+}
+
 /**
- * ✅ Règle produit blindée:
- * - si l'id ressemble à un "scrutin-*" => TOUJOURS fiche scrutin
- * - sinon: entity décide (loi => fiche loi)
- * - amendement/motion/declaration: pas d'écran dédié => pas de navigation (null)
+ * ✅ IMPORTANT:
+ * On veut filtrer les ids "événement" (scrutin-4944 / motion-123 / declaration-456)
+ * MAIS on ne doit PAS filtrer les slugs "scrutin-public-..." (qui commencent aussi par "scrutin-").
  */
-function buildHref(entity: Entity, rawId: string | null | undefined): string | null {
-  const id = String(rawId ?? "").trim();
-  if (!id) return null;
+function isEventIdLike(v: string): boolean {
+  const s = String(v ?? "").trim();
+  if (!s) return false;
 
-  // 🟣 PRIORITÉ ABSOLUE: scrutin
-  if (id.startsWith("scrutin-") || entity === "scrutin") {
-    return `/scrutins/${encodeURIComponent(id)}`;
-  }
+  // scrutin-4944 (digits only)
+  if (/^scrutin-\d+$/i.test(s)) return true;
 
-  // 🔵 Loi
-  if (entity === "loi") {
-    // sécurité: si une "loi" polluée a un id scrutin-* => on force scrutin
-    if (id.startsWith("scrutin-")) return `/scrutins/${encodeURIComponent(id)}`;
-    return `/lois/${encodeURIComponent(id)}`;
-  }
+  // motion-123, declaration-123 (si jamais tu en as)
+  if (/^motion-\d+$/i.test(s)) return true;
+  if (/^declaration-\d+$/i.test(s)) return true;
 
-  // 🟡 Pas d'écran dédié (pour l’instant)
-  return null;
+  return false;
+}
+
+/** ✅ évite de prendre un "loi_id" qui est en réalité un id d'événement numérique */
+function safeCanonLoiId(x: any): string | null {
+  const v = safeStr(x);
+  if (!v) return null;
+
+  // 🔒 on filtre seulement les vrais ids "événement" numériques
+  if (isEventIdLike(v)) return null;
+
+  return v;
 }
 
 function detectEntityFromIdFallback(id: string, defaultEntity: Entity): Entity {
   if (!id) return defaultEntity;
+
+  // ✅ ici on garde la logique large : si un rawId commence par scrutin-/motion-/declaration-/amendement-
+  // c'est une heuristique d'entity (et ça inclut "scrutin-public-...")
   if (id.startsWith("scrutin-")) return "scrutin";
   if (id.startsWith("motion-")) return "motion";
   if (id.startsWith("declaration-")) return "declaration";
-  // amendement-* (si jamais tu en as)
   if (id.startsWith("amendement-")) return "amendement";
   return defaultEntity;
 }
 
 function humanScrutinSubtitle(r: any) {
   const res = safeStr(r.resultat);
-  if (res) return res; // "adopté / rejeté / n'a pas adopté"
+  if (res) return res;
   const obj = safeStr(r.objet);
   if (obj) return obj;
-  const num = r.numero != null ? `n°${r.numero}` : "—";
-  return `Vote ${num}`;
+  const num = safeStr(r.numero_scrutin) ?? safeStr(r.numero);
+  return num ? `Vote n°${num}` : "Vote";
 }
 
 /**
- * Feed Actu V1
- * - scrutins_app (view existante)
- * - lois_recent (view existante)
+ * ✅ Règle produit blindée (NAV UNIQUE)
+ * - on ne fabrique PLUS jamais "/scrutins/..." ou "/lois/..." ici
+ * - on délègue à routeFromItemId(id)
+ * - amendement/motion/declaration: pas d'écran dédié => null
  */
-export async function fetchActuItems(opts?: { limScrutins?: number; limLois?: number }): Promise<ActuItem[]> {
-  const limScrutins = opts?.limScrutins ?? 90;
+function buildHref(entity: Entity, rawId: string | null | undefined): string | null {
+  const id = String(rawId ?? "").trim();
+  if (!id) return null;
+
+  if (entity === "amendement" || entity === "motion" || entity === "declaration") return null;
+  return routeFromItemId(id);
+}
+
+/** ✅ 1-run validation: est-ce que la view renvoie bien loi_id_canon ? */
+function debugScrutinsViewSnapshot(scrutins: any[] | null | undefined) {
+  if (!DEBUG_ACTU) return;
+
+  const r0: any = (scrutins ?? [])[0];
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  dlog("[ACTU][FETCH] scrutins_loi_enrichis_unified snapshot");
+  dlog("[ACTU][FETCH] sample keys =", Object.keys(r0 ?? {}));
+  dlog("[ACTU][FETCH] sample row =", {
+    numero_scrutin: r0?.numero_scrutin,
+    loi_id_canon: r0?.loi_id_canon,
+    loi_id_scrutin: r0?.loi_id_scrutin,
+    titre: short(r0?.titre ?? r0?.objet ?? "", 90),
+  });
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+/** ✅ 1-run validation: combien de canon null / combien de canon ok ? */
+function debugScrutinsCanonStats(scrutinsItems: ActuItem[]) {
+  if (!DEBUG_ACTU) return;
+
+  const total = scrutinsItems.length;
+  let canonOk = 0;
+  let canonNull = 0;
+
+  // bonus: combien de "event id" filtrés (scrutin-4944 etc.)
+  let filteredEventIds = 0;
+
+  for (const it of scrutinsItems) {
+    if (it.loi_id) canonOk += 1;
+    else canonNull += 1;
+  }
+
+  // on ne peut pas connaître précisément les filtrés ici (car déjà filtrés),
+  // mais on log l'heuristique sur l'ID principal si tu veux :
+  for (const it of scrutinsItems) {
+    if (isEventIdLike(it.id)) filteredEventIds += 1;
+  }
+
+  const pct = total > 0 ? Math.round((canonOk / total) * 1000) / 10 : 0;
+
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  dlog(
+    `[ACTU][FETCH] canon stats (scrutinsItems): ok=${canonOk}/${total} (${pct}%) | canon_null=${canonNull} | idEventLike=${filteredEventIds}`
+  );
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+/**
+ * Feed Actu (stabilisé)
+ * ✅ SCRUTINS: on lit une view enrichie qui expose loi_id_canon + loi_id_scrutin
+ *    -> BUT: rawDB.loi_id doit devenir un vrai “loi_id canon” quand dispo
+ *
+ * ✅ LOIS: lois_recent (si dispo chez toi)
+ */
+export async function fetchActuItems(opts?: {
+  limScrutins?: number;
+  limLois?: number;
+}): Promise<ActuItem[]> {
+  const limScrutins = opts?.limScrutins ?? 120;
   const limLois = opts?.limLois ?? 40;
 
-  // 1) SCRUTINS (colonnes réelles de scrutins_app)
+  // 1) SCRUTINS (view enrichie)
+  // Schéma: numero_scrutin, loi_id_canon, loi_id_scrutin, date_scrutin, titre, objet, resultat, kind, article_ref
   const { data: scrutins, error: e1 } = await supabase
-    .from("scrutins_app")
-    .select("id_an, loi_id, group_key, titre, objet, type_texte, date_scrutin, numero, resultat, kind, article_ref")
+    .from("scrutins_loi_enrichis_unified")
+    .select(
+      [
+        "numero_scrutin",
+        "loi_id_canon",
+        "loi_id_scrutin",
+        "date_scrutin",
+        "titre",
+        "objet",
+        "resultat",
+        "kind",
+        "article_ref",
+      ].join(",")
+    )
     .order("date_scrutin", { ascending: false })
     .limit(limScrutins);
 
-  if (e1) throw new Error(`scrutins_app: ${e1.message}`);
+  if (e1) throw new Error(`scrutins_loi_enrichis_unified: ${e1.message}`);
+
+  debugScrutinsViewSnapshot(scrutins as any[]);
 
   const scrutinsItems: ActuItem[] = (scrutins ?? []).map((r: any) => {
-    const loiId = safeStr(r.loi_id); // peut être pollué chez toi -> OK, mais on n'en déduit pas la route
+    // ✅ loi_id_canon (filtré uniquement si c'est un vrai id event "scrutin-4944")
+    const loiIdCanon = safeCanonLoiId(r.loi_id_canon);
+
+    // ✅ ID principal côté app: slug scrutin-* si dispo sinon "scrutin-<numero_scrutin>"
+    const num = safeStr(r.numero_scrutin);
+    const loiIdScrutin = safeStr(r.loi_id_scrutin);
+    const idScrutin = loiIdScrutin || (num ? `scrutin-${num}` : "scrutin");
+
     const dateISO = asISO(r.date_scrutin);
 
     const titre = safeStr(r.titre);
     const objet = safeStr(r.objet);
 
-    const title = titre ?? objet ?? (r.numero != null ? `Scrutin n°${r.numero}` : "Scrutin");
-    const subtitle = humanScrutinSubtitle(r);
-
-    // ✅ ID du scrutin: on privilégie id_an (souvent "scrutin-*")
-    const idScrutin = safeStr(r.id_an) ?? (r.numero != null ? `scrutin-${r.numero}` : "scrutin");
+    const title = titre ?? objet ?? (num ? `Scrutin n°${num}` : "Scrutin");
+    const subtitle = humanScrutinSubtitle({ ...r, numero_scrutin: num });
 
     return {
       id: String(idScrutin),
       entity: "scrutin",
-      loi_id: loiId,
+
+      // ✅ clé: loi_id = CANON seulement (et "scrutin-public-..." est désormais accepté)
+      loi_id: loiIdCanon,
+
       article_ref: safeStr(r.article_ref),
       date: dateISO,
       phase_label: null,
+
       title,
       subtitle,
       tldr: null,
-      route: { href: buildHref("scrutin", idScrutin) }, // ✅ jamais /lois ici
+
+      // ✅ alias raw
+      titre,
+      objet,
+      resultat: safeStr(r.resultat),
+      numero_scrutin: num,
+
+      route: { href: buildHref("scrutin", idScrutin) },
     };
   });
 
-  // 2) LOIS (dernière activité)
+  debugScrutinsCanonStats(scrutinsItems);
+
+  // 2) LOIS (dernière activité) — si ta view est vide, pas grave
   const { data: lois, error: e2 } = await supabase
     .from("lois_recent")
     .select("*")
@@ -135,23 +267,18 @@ export async function fetchActuItems(opts?: { limScrutins?: number; limLois?: nu
   if (e2) throw new Error(`lois_recent: ${e2.message}`);
 
   const loisItems: ActuItem[] = (lois ?? []).map((r: any) => {
-    // ⚠️ IMPORTANT: cette view peut contenir des "événements" pollués (ex: loi_id = "scrutin-*")
     const rawId =
-      safeStr(r.loi_id) ??
-      safeStr(r.id_dossier) ??
-      safeStr(r.id) ??
-      "loi";
+      safeStr(r.loi_id) ?? safeStr(r.loi_id_canon) ?? safeStr(r.id_dossier) ?? safeStr(r.id) ?? "loi";
 
     const dateISO = asISO(r.date_dernier_scrutin ?? r.derniere_activite_date ?? r.date);
 
-    // ✅ Si l'id ressemble à scrutin-/motion-/declaration- => on corrige l'entity ici
+    // ✅ si pollution (scrutin-...), on corrige entity (et on évite de forcer loi_id)
     const entity: Entity = detectEntityFromIdFallback(String(rawId), "loi");
 
     const title =
       safeStr(r.titre_loi_canon) ??
       safeStr(r.titre_loi) ??
       safeStr(r.titre) ??
-      // fallback propre selon entity
       (entity === "scrutin"
         ? "Scrutin"
         : entity === "motion"
@@ -161,22 +288,28 @@ export async function fetchActuItems(opts?: { limScrutins?: number; limLois?: nu
         : `Loi ${rawId}`);
 
     const subtitle =
-      safeStr(r.resume_citoyen) ??
-      safeStr(r.objet) ??
-      "Dernières avancées à l’Assemblée";
-
+      safeStr(r.resume_citoyen) ?? safeStr(r.objet) ?? "Dernières avancées à l’Assemblée";
     const phase = safeStr(r.phase_label ?? r.phase);
 
     return {
       id: String(rawId),
       entity,
-      loi_id: entity === "loi" ? String(rawId) : safeStr(r.loi_id) ?? null,
+
+      // ✅ loi_id “canon” seulement si entity=loi, et filtré au cas où (scrutin-4944 etc.)
+      loi_id: entity === "loi" ? safeCanonLoiId(rawId) : null,
+
       date: dateISO,
       phase_label: phase,
+
       title,
       subtitle,
       tldr: safeStr(r.tldr ?? r.resume),
-      route: { href: buildHref(entity, String(rawId)) }, // ✅ scrutin-* => /scrutins/...
+
+      // alias raw (si dispo)
+      titre: safeStr(r.titre_loi_canon) ?? safeStr(r.titre_loi) ?? safeStr(r.titre),
+      objet: safeStr(r.objet) ?? null,
+
+      route: { href: buildHref(entity, String(rawId)) },
     };
   });
 
@@ -194,5 +327,5 @@ export async function fetchActuFeed() {
   return fetchActuItems();
 }
 export async function fetchActuRecent() {
-  return fetchActuItems({ limScrutins: 60, limLois: 30 });
+  return fetchActuItems({ limScrutins: 80, limLois: 30 });
 }

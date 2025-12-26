@@ -1,8 +1,7 @@
 // app/(tabs)/deputes/index.tsx
 
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -18,10 +17,8 @@ import { supabase } from "../../../lib/supabaseClient";
 import { theme } from "../../../lib/theme";
 
 type DeputeRow = {
-  // ✅ ancien champ (peut exister)
   id_an?: string | null;
 
-  // ✅ nouveaux ids (peuvent NE PAS exister dans la table)
   id_depute?: string | null;
   depute_id?: string | null;
   id?: string | null;
@@ -30,32 +27,29 @@ type DeputeRow = {
   nomcomplet: string | null;
   prenom: string | null;
   nom: string | null;
+
   groupeAbrev: string | null;
   groupe: string | null;
+
   circonscription: string | null;
   departementNom: string | null;
   departementCode: string | null;
+
   photoUrl?: string | null;
   photourl?: string | null;
 };
 
-type GroupFilter = {
-  code: string;
-  label: string;
+type GroupChip = {
+  code: string | null; // null => Tous
+  label: string; // label court
+  count: number;
 };
 
 function clean(v: any) {
   return String(v ?? "").trim();
 }
 
-function isMissingColumnError(err: any) {
-  const code = String(err?.code ?? "");
-  const msg = String(err?.message ?? "").toLowerCase();
-  return code === "42703" || msg.includes("does not exist") || msg.includes("undefined column");
-}
-
 function getDepId(d: DeputeRow): string | null {
-  // priorité aux ids “stables”
   const a = clean(d.id_depute);
   if (a && a.toLowerCase() !== "null") return a;
 
@@ -65,7 +59,6 @@ function getDepId(d: DeputeRow): string | null {
   const c = clean(d.id);
   if (c && c.toLowerCase() !== "null") return c;
 
-  // fallback legacy
   const z = clean(d.id_an);
   if (z && z.toLowerCase() !== "null") return z;
 
@@ -73,171 +66,14 @@ function getDepId(d: DeputeRow): string | null {
 }
 
 function normalizeText(value: string) {
-  return value
-    .normalize("NFD")                         // accents → séparés
-    .replace(/[\u0300-\u036f]/g, "")          // supprime accents
-    .replace(/[-'’_.]/g, " ")                 // 🔥 tirets & séparateurs → espace
-    .replace(/\s+/g, " ")                     // espaces multiples → un seul
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[-'’_.]/g, " ")
+    .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 }
-
-export default function DeputesListScreen() {
-  const router = useRouter();
-
-  const [deputes, setDeputes] = useState<DeputeRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const [search, setSearch] = useState("");
-  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
-  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
-
-  const loadDeputes = useCallback(async () => {
-  try {
-    setLoading(true);
-    setError(null);
-
-    // 1) requête MINIMALE (celle qui a le plus de chances de marcher)
-    //    -> pas de .order() (souvent la source du crash)
-    const r1 = await supabase
-      .from("deputes_officiels")
-      .select(
-        `
-        id_an,
-        nomComplet,
-        nomcomplet,
-        prenom,
-        nom,
-        groupeAbrev,
-        groupe,
-        circonscription,
-        departementNom,
-        departementCode,
-        photoUrl,
-        photourl
-      `
-      );
-
-    if (r1.error) {
-      console.warn("[DEPUTES LIST] deputes_officiels r1 error:", r1.error);
-      setError("Impossible de charger la liste des députés.");
-      setDeputes([]);
-      return;
-    }
-
-    const rows = (r1.data || []) as DeputeRow[];
-
-    // 2) filtre id_an valide (comme AVANT, pour revenir au stable)
-    const filtered = rows.filter((d) => {
-      const raw = String(d.id_an ?? "").trim();
-      if (!raw) return false;
-      if (raw.toLowerCase() === "null") return false;
-      return true;
-    });
-
-    // 3) tri côté JS (évite les erreurs de colonne DB)
-    const normName = (d: DeputeRow) =>
-      (
-        d.nomcomplet ||
-        d.nomComplet ||
-        `${d.prenom ?? ""} ${d.nom ?? ""}`.trim() ||
-        ""
-      )
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
-
-    filtered.sort((a, b) => normName(a).localeCompare(normName(b), "fr"));
-
-    console.log(
-      "[DEPUTES LIST] nb brut =",
-      rows.length,
-      "| nb filtrés (id_an valide) =",
-      filtered.length
-    );
-
-    setDeputes(filtered);
-  } catch (e) {
-    console.warn("[DEPUTES LIST] erreur inattendue:", e);
-    setError("Erreur inattendue lors du chargement des députés.");
-    setDeputes([]);
-  } finally {
-    setLoading(false);
-  }
-}, []);
-
-
-  useEffect(() => {
-    loadDeputes();
-  }, [loadDeputes]);
-
-  const groups: GroupFilter[] = useMemo(() => {
-    const map = new Map<string, string>();
-    deputes.forEach((d) => {
-      if (d.groupeAbrev) {
-        const label = d.groupe || d.groupeAbrev;
-        if (!map.has(d.groupeAbrev)) map.set(d.groupeAbrev, label);
-      }
-    });
-
-    return Array.from(map.entries())
-      .map(([code, label]) => ({ code, label }))
-      .sort((a, b) => a.label.localeCompare(b.label, "fr"));
-  }, [deputes]);
-
-  const filteredDeputes = useMemo(() => {
-    const q = normalizeText(search.trim());
-
-    return deputes.filter((d) => {
-      if (selectedGroup && d.groupeAbrev !== selectedGroup) return false;
-
-      if (q) {
-  const nameRaw =
-    d.nomComplet ||
-    d.nomcomplet ||
-    `${d.prenom ?? ""} ${d.nom ?? ""}`;
-
-  const circoRaw =
-    d.circonscription ||
-    d.departementNom ||
-    d.departementCode ||
-    "";
-
-  const name = normalizeText(nameRaw);
-  const circo = normalizeText(circoRaw);
-
-  if (!name.includes(q) && !circo.includes(q)) return false;
-}
-
-      return true;
-    });
-  }, [deputes, search, selectedGroup]);
-
-  const renderAvatar = (item: DeputeRow) => {
-    const name =
-      item.nomComplet ||
-      item.nomcomplet ||
-      `${item.prenom ?? ""} ${item.nom ?? ""}`.trim();
-
-    const parts = String(name ?? "").split(" ").filter(Boolean);
-    const initials =
-      parts.length >= 2
-        ? `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase()
-        : String(name ?? "").slice(0, 2).toUpperCase();
-
-    const photoUrl = item.photoUrl || item.photourl || null;
-
-    return (
-      <View style={styles.avatar}>
-        {photoUrl ? (
-          <Image source={{ uri: photoUrl }} style={styles.avatarImage} contentFit="cover" />
-        ) : (
-          <Text style={styles.avatarText}>{initials || "??"}</Text>
-        )}
-      </View>
-    );
-  };
 
 function findMatchRange(text: string, query: string) {
   const t = normalizeText(text);
@@ -267,6 +103,189 @@ function renderHighlightedText(text: string, query: string) {
   );
 }
 
+function useDebouncedValue<T>(value: T, delay = 150) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
+function shortGroupLabel(raw: string) {
+  const s = String(raw ?? "").trim();
+  const base = s.split("(")[0].split("—")[0].split(" - ")[0].trim();
+  if (!base) return s || "Groupe";
+  return base.length > 26 ? base.slice(0, 26).trimEnd() + "…" : base;
+}
+
+export default function DeputesListScreen() {
+  const router = useRouter();
+  const listRef = useRef<FlatList<DeputeRow>>(null);
+
+  const [deputes, setDeputes] = useState<DeputeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search, 150);
+
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null); // null => Tous
+
+  const loadDeputes = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const r1 = await supabase.from("deputes_officiels").select(`
+        id_an,
+        nomComplet,
+        nomcomplet,
+        prenom,
+        nom,
+        groupeAbrev,
+        groupe,
+        circonscription,
+        departementNom,
+        departementCode,
+        photoUrl,
+        photourl
+      `);
+
+      if (r1.error) {
+        console.warn("[DEPUTES LIST] deputes_officiels r1 error:", r1.error);
+        setError("Impossible de charger la liste des députés.");
+        setDeputes([]);
+        return;
+      }
+
+      const rows = (r1.data || []) as DeputeRow[];
+
+      const filtered = rows.filter((d) => {
+        const raw = String(d.id_an ?? "").trim();
+        if (!raw) return false;
+        if (raw.toLowerCase() === "null") return false;
+        return true;
+      });
+
+      const normName = (d: DeputeRow) =>
+        (
+          d.nomcomplet ||
+          d.nomComplet ||
+          `${d.prenom ?? ""} ${d.nom ?? ""}`.trim() ||
+          ""
+        )
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "");
+
+      filtered.sort((a, b) => normName(a).localeCompare(normName(b), "fr"));
+
+      console.log(
+        "[DEPUTES LIST] nb brut =",
+        rows.length,
+        "| nb filtrés (id_an valide) =",
+        filtered.length
+      );
+
+      setDeputes(filtered);
+    } catch (e) {
+      console.warn("[DEPUTES LIST] erreur inattendue:", e);
+      setError("Erreur inattendue lors du chargement des députés.");
+      setDeputes([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDeputes();
+  }, [loadDeputes]);
+
+  const filteredDeputes = useMemo(() => {
+    const q = normalizeText(debouncedSearch.trim());
+
+    return deputes.filter((d) => {
+      if (selectedGroup && d.groupeAbrev !== selectedGroup) return false;
+
+      if (q) {
+        const nameRaw =
+          d.nomComplet || d.nomcomplet || `${d.prenom ?? ""} ${d.nom ?? ""}`;
+        const circoRaw =
+          d.circonscription || d.departementNom || d.departementCode || "";
+
+        const name = normalizeText(nameRaw);
+        const circo = normalizeText(circoRaw);
+
+        if (!name.includes(q) && !circo.includes(q)) return false;
+      }
+
+      return true;
+    });
+  }, [deputes, debouncedSearch, selectedGroup]);
+
+  const groupChips: GroupChip[] = useMemo(() => {
+    const map = new Map<string, { label: string; count: number }>();
+
+    for (const d of deputes) {
+      const code = d.groupeAbrev ? String(d.groupeAbrev) : "";
+      if (!code) continue;
+
+      const labelRaw = d.groupe || d.groupeAbrev || code;
+      const label = shortGroupLabel(labelRaw);
+
+      const prev = map.get(code);
+      if (!prev) map.set(code, { label, count: 1 });
+      else map.set(code, { label: prev.label, count: prev.count + 1 });
+    }
+
+    const items = Array.from(map.entries()).map(([code, v]) => ({
+      code,
+      label: v.label,
+      count: v.count,
+    }));
+
+    items.sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.label.localeCompare(b.label, "fr");
+    });
+
+    return [{ code: null, label: "Tous", count: deputes.length }, ...items];
+  }, [deputes]);
+
+  const setGroup = useCallback((code: string | null) => {
+    setSelectedGroup(code);
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
+
+  const renderAvatar = (item: DeputeRow) => {
+    const name =
+      item.nomComplet ||
+      item.nomcomplet ||
+      `${item.prenom ?? ""} ${item.nom ?? ""}`.trim();
+
+    const parts = String(name ?? "").split(" ").filter(Boolean);
+    const initials =
+      parts.length >= 2
+        ? `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase()
+        : String(name ?? "").slice(0, 2).toUpperCase();
+
+    const photoUrl = item.photoUrl || item.photourl || null;
+
+    return (
+      <View style={styles.avatar}>
+        {photoUrl ? (
+          <Image
+            source={{ uri: photoUrl }}
+            style={styles.avatarImage}
+            contentFit="cover"
+          />
+        ) : (
+          <Text style={styles.avatarText}>{initials || "??"}</Text>
+        )}
+      </View>
+    );
+  };
 
   const renderItem = ({ item }: { item: DeputeRow }) => {
     const depId = getDepId(item);
@@ -280,14 +299,16 @@ function renderHighlightedText(text: string, query: string) {
     const circoLabel =
       item.circonscription ||
       (item.departementNom || item.departementCode
-        ? `${item.departementNom ?? ""}${item.departementCode ? ` (${item.departementCode})` : ""}`
+        ? `${item.departementNom ?? ""}${
+            item.departementCode ? ` (${item.departementCode})` : ""
+          }`
         : null);
 
     return (
       <Pressable
         style={styles.row}
         onPress={() => {
-          if (!item.id_an) return;
+          if (!depId) return;
           router.push(`/deputes/${encodeURIComponent(String(depId))}`);
         }}
         disabled={!depId}
@@ -295,18 +316,22 @@ function renderHighlightedText(text: string, query: string) {
         {renderAvatar(item)}
         <View style={{ flex: 1 }}>
           <Text style={styles.name} numberOfLines={1}>
-  {renderHighlightedText(displayName, search)}
-</Text>
+            {renderHighlightedText(displayName, search)}
+          </Text>
+
+          {/* ✅ Groupe = info (pas un lien). Le filtre chips suffit. */}
           <Text style={styles.meta} numberOfLines={1}>
             {item.groupeAbrev ? `[${item.groupeAbrev}] ` : ""}
             {item.groupe ?? ""}
           </Text>
+
           {circoLabel && (
             <Text style={styles.metaSmall} numberOfLines={1}>
               {circoLabel}
             </Text>
           )}
         </View>
+
         <Text style={styles.chevron}>›</Text>
       </Pressable>
     );
@@ -317,11 +342,127 @@ function renderHighlightedText(text: string, query: string) {
     return depId ? `depute-${depId}` : `depute-${index}`;
   };
 
+  const renderEmptyState = () => (
+    <View style={styles.emptyWrap}>
+      <Text style={styles.emptyIcon}>🔍</Text>
+      <Text style={styles.emptyTitle}>Aucun député trouvé</Text>
+      <Text style={styles.emptyText}>
+        Essayez avec un autre nom, un département, ou modifiez les filtres.
+      </Text>
+
+      <Pressable
+        style={styles.emptyBtn}
+        onPress={() => {
+          setSearch("");
+          setSelectedGroup(null);
+          listRef.current?.scrollToOffset({ offset: 0, animated: true });
+        }}
+      >
+        <Text style={styles.emptyBtnText}>Effacer les filtres</Text>
+      </Pressable>
+    </View>
+  );
+
+  const headerSubtitle = selectedGroup
+    ? (() => {
+        const chip = groupChips.find((c) => c.code === selectedGroup);
+        const label = chip?.label || selectedGroup;
+        const cnt = chip?.count ?? filteredDeputes.length;
+        return `${label} · ${cnt} député${cnt > 1 ? "s" : ""}`;
+      })()
+    : `Tous · ${deputes.length} députés`;
+
+  const showSearchHint =
+    search.trim().length > 0
+      ? `${filteredDeputes.length} résultat(s) — recherche sur le nom et la circonscription`
+      : null;
+
+  const renderHeader = () => (
+    <View style={styles.stickyHeaderWrap}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Députés</Text>
+        <Text style={styles.headerSubtitle}>{headerSubtitle}</Text>
+      </View>
+
+      <View style={styles.searchContainer}>
+        <View style={styles.searchRow}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Nom, circonscription ou département…"
+            placeholderTextColor={theme.colors.subtext}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+
+          {search.trim().length > 0 && (
+            <Pressable
+              onPress={() => setSearch("")}
+              style={styles.clearBtn}
+              hitSlop={10}
+            >
+              <Text style={styles.clearBtnText}>Effacer</Text>
+            </Pressable>
+          )}
+        </View>
+
+        {showSearchHint ? (
+          <Text style={styles.searchHint}>{showSearchHint}</Text>
+        ) : null}
+      </View>
+
+      {/* ✅ Chips groupes : filtre uniquement */}
+      {groupChips.length > 1 && (
+        <View style={styles.chipsWrap}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsContent}
+          >
+            {groupChips.map((g) => {
+              const active =
+                (selectedGroup === null && g.code === null) ||
+                selectedGroup === g.code;
+
+              return (
+                <Pressable
+                  key={String(g.code ?? "all")}
+                  onPress={() => setGroup(g.code)}
+                  style={[styles.chip, active && styles.chipActive]}
+                >
+                  <Text
+                    style={[styles.chipText, active && styles.chipTextActive]}
+                    numberOfLines={1}
+                  >
+                    {`${g.label} · ${g.count}`}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
+      <View style={styles.headerDivider} />
+    </View>
+  );
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.center}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Chargement des députés…</Text>
+      <SafeAreaView style={styles.container}>
+        <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <View key={i} style={styles.skeletonRow}>
+              <View style={styles.skeletonAvatar} />
+              <View style={{ flex: 1 }}>
+                <View style={styles.skeletonLine} />
+                <View style={[styles.skeletonLine, { width: "60%" }]} />
+              </View>
+            </View>
+          ))}
+        </View>
       </SafeAreaView>
     );
   }
@@ -338,120 +479,32 @@ function renderHighlightedText(text: string, query: string) {
     return (
       <SafeAreaView style={styles.center}>
         <Text style={styles.searchHint}>
-  Essayez avec un nom plus court ou un département.
-</Text>
+          Essayez avec un nom plus court ou un département.
+        </Text>
       </SafeAreaView>
     );
   }
 
-  const currentGroupLabel =
-    selectedGroup
-      ? groups.find((g) => g.code === selectedGroup)?.label || selectedGroup
-      : "Tous les groupes";
+  const isEmpty = deputes.length > 0 && filteredDeputes.length === 0;
+
+  if (isEmpty) {
+    return (
+      <SafeAreaView style={styles.container}>
+        {renderHeader()}
+        {renderEmptyState()}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Députés</Text>
-        <Text style={styles.headerSubtitle}>
-  {filteredDeputes.length} député{filteredDeputes.length > 1 ? "s" : ""} affiché
-  {filteredDeputes.length > 1 ? "s" : ""} sur {deputes.length}
-</Text>
-      </View>
-
-      <View style={styles.searchContainer}>
-  <View style={styles.searchRow}>
-    <TextInput
-      style={styles.searchInput}
-      placeholder="Nom, circonscription ou département…"
-      placeholderTextColor={theme.colors.subtext}
-      value={search}
-      onChangeText={setSearch}
-      autoCapitalize="none"
-      autoCorrect={false}
-      returnKeyType="search"
-    />
-
-    {search.trim().length > 0 && (
-      <Pressable
-        onPress={() => setSearch("")}
-        style={styles.clearBtn}
-        hitSlop={10}
-      >
-        <Text style={styles.clearBtnText}>Effacer</Text>
-      </Pressable>
-    )}
-  </View>
-
-  {search.trim().length > 0 ? (
-    <Text style={styles.searchHint}>
-      {filteredDeputes.length} résultat(s) — recherche sur le nom et la circonscription
-    </Text>
-  ) : null}
-</View>
-
-      {groups.length > 0 && (
-        <View style={styles.dropdownContainer}>
-          <Text style={styles.dropdownLabel}>Filtrer par groupe</Text>
-          <Pressable
-            style={styles.dropdownSelector}
-            onPress={() => setGroupDropdownOpen((open) => !open)}
-          >
-            <Text style={styles.dropdownSelectorText}>{currentGroupLabel}</Text>
-            <Text style={styles.dropdownSelectorChevron}>
-              {groupDropdownOpen ? "▴" : "▾"}
-            </Text>
-          </Pressable>
-
-          {groupDropdownOpen && (
-            <View style={styles.dropdownList}>
-              <ScrollView nestedScrollEnabled style={{ maxHeight: 240 }}>
-                <Pressable
-                  style={styles.dropdownItem}
-                  onPress={() => {
-                    setSelectedGroup(null);
-                    setGroupDropdownOpen(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownItemText,
-                      !selectedGroup && styles.dropdownItemTextActive,
-                    ]}
-                  >
-                    Tous les groupes
-                  </Text>
-                </Pressable>
-
-                {groups.map((g) => (
-                  <Pressable
-                    key={g.code}
-                    style={styles.dropdownItem}
-                    onPress={() => {
-                      setSelectedGroup(g.code);
-                      setGroupDropdownOpen(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.dropdownItemText,
-                        selectedGroup === g.code && styles.dropdownItemTextActive,
-                      ]}
-                    >
-                      {g.label}
-                    </Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-        </View>
-      )}
-
       <FlatList
+        ref={listRef}
         data={filteredDeputes}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
+        ListHeaderComponent={renderHeader}
+        stickyHeaderIndices={[0]}
         contentContainerStyle={styles.listContent}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         keyboardShouldPersistTaps="handled"
@@ -469,10 +522,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 16,
   },
-  loadingText: { marginTop: 8, color: theme.colors.subtext },
   errorText: {
     color: theme.colors.danger || "red",
     textAlign: "center",
+    marginHorizontal: 16,
+  },
+
+  stickyHeaderWrap: {
+    backgroundColor: theme.colors.background,
+    paddingBottom: 8,
+  },
+  headerDivider: {
+    height: 1,
+    backgroundColor: theme.colors.border || "rgba(148,163,184,0.22)",
+    marginTop: 10,
     marginHorizontal: 16,
   },
 
@@ -495,9 +558,10 @@ const styles = StyleSheet.create({
   searchContainer: {
     paddingHorizontal: 16,
     paddingTop: 6,
-    paddingBottom: 4,
+    paddingBottom: 6,
   },
   searchInput: {
+    flex: 1,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -505,54 +569,62 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 13,
   },
-
-  dropdownContainer: {
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    paddingBottom: 4,
-  },
-  dropdownLabel: {
-    fontSize: 12,
+  searchHint: {
+    fontSize: 11,
     color: theme.colors.subtext,
-    marginBottom: 4,
+    marginTop: 6,
+    marginLeft: 4,
   },
-  dropdownSelector: {
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  clearBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: theme.colors.border || "rgba(148,163,184,0.25)",
+  },
+  clearBtnText: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  chipsWrap: {
+    paddingTop: 2,
+    paddingBottom: 6,
+  },
+  chipsContent: {
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  chip: {
     flexDirection: "row",
     alignItems: "center",
     borderRadius: 999,
-    backgroundColor: theme.colors.card,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-  },
-  dropdownSelectorText: {
-    flex: 1,
-    fontSize: 13,
-    color: theme.colors.text,
-  },
-  dropdownSelectorChevron: {
-    fontSize: 14,
-    color: theme.colors.subtext,
-    marginLeft: 8,
-  },
-  dropdownList: {
-    marginTop: 4,
-    borderRadius: 12,
     backgroundColor: theme.colors.card,
     borderWidth: 1,
-    borderColor: theme.colors.border || "rgba(148,163,184,0.4)",
-    overflow: "hidden",
+    borderColor: theme.colors.border || "rgba(148,163,184,0.22)",
+    maxWidth: 260,
   },
-  dropdownItem: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+  chipActive: {
+    backgroundColor: theme.colors.primarySoft || "rgba(79,70,229,0.16)",
+    borderColor: theme.colors.primary || theme.colors.text,
   },
-  dropdownItemText: {
-    fontSize: 13,
+  chipText: {
+    fontSize: 12,
+    fontWeight: "700",
     color: theme.colors.subtext,
   },
-  dropdownItemTextActive: {
-    color: theme.colors.primary,
-    fontWeight: "600",
+  chipTextActive: {
+    color: theme.colors.primary || theme.colors.text,
   },
 
   listContent: {
@@ -575,10 +647,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft || "rgba(79,70,229,0.16)",
     overflow: "hidden",
   },
-  avatarImage: {
-    width: "100%",
-    height: "100%",
-  },
+  avatarImage: { width: "100%", height: "100%" },
   avatarText: {
     color: theme.colors.primary,
     fontWeight: "700",
@@ -610,35 +679,61 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.border || "rgba(148,163,184,0.3)",
     marginVertical: 6,
   },
-  searchHint: {
-  fontSize: 11,
-  color: theme.colors.subtext,
-  marginTop: 6,
-  marginLeft: 4,
-},
-searchRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  gap: 10,
-},
 
-clearBtn: {
-  paddingHorizontal: 10,
-  paddingVertical: 8,
-  borderRadius: 999,
-  backgroundColor: "rgba(255,255,255,0.06)",
-  borderWidth: 1,
-  borderColor: theme.colors.border || "rgba(148,163,184,0.25)",
-},
+  highlight: {
+    backgroundColor: "rgba(250,204,21,0.35)",
+    color: theme.colors.text,
+    borderRadius: 4,
+  },
 
-clearBtnText: {
-  color: theme.colors.text,
-  fontSize: 12,
-  fontWeight: "700",
-},
-highlight: {
-  backgroundColor: "rgba(250,204,21,0.35)", // jaune doux
-  color: theme.colors.text,
-  borderRadius: 4,
-},
+  emptyWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
+  },
+  emptyIcon: { fontSize: 36, marginBottom: 12 },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: theme.colors.text,
+    marginBottom: 6,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: theme.colors.subtext,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  emptyBtn: {
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: theme.colors.primarySoft || "rgba(79,70,229,0.16)",
+  },
+  emptyBtnText: {
+    color: theme.colors.primary,
+    fontWeight: "700",
+    fontSize: 13,
+  },
+
+  skeletonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  skeletonAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    backgroundColor: theme.colors.card,
+    marginRight: 10,
+  },
+  skeletonLine: {
+    height: 10,
+    borderRadius: 6,
+    backgroundColor: theme.colors.card,
+    marginBottom: 6,
+    width: "80%",
+  },
 });

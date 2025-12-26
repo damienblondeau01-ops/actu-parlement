@@ -12,47 +12,43 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 
 import { theme } from "../../../lib/theme";
 import { fetchActuItems, type ActuItem as ActuItemDB } from "@/lib/queries/actu";
 import { groupActuItems, type GroupedActuRow } from "@/lib/actu/grouping";
 
+import { ActuCard, HeroActuCard } from "@/components/actu";
+import type { ActuItemUI, Tone } from "@/components/actu/types";
+
 const colors = theme.colors;
 
-type Tone = "blue" | "pink" | "mint" | "amber" | "violet";
+/** =========================
+ *  ACTU CAP (Option A)
+ *  - Cap la preview d'items dans le FEED uniquement
+ *  - Conserve le total réel dans summary.total
+ *  ========================= */
+const ACTU_FEED_MAX_ITEMS_PER_STORY = 12;
 
-type ActuItemUI = {
-  id: string;
-  dateISO: string; // ISO (garanti)
-  title: string;
-  subtitle: string;
-  tone: Tone;
-  iconLib: "ion" | "mci";
-  iconName: string;
-  tag?: string;
+/** =========================
+ *  MINI MODE DEBUG (ACTU)
+ *  - Active via env: EXPO_PUBLIC_ACTU_DEBUG=1
+ * ========================= */
+const DEBUG_ACTU =
+  (typeof process !== "undefined" &&
+    (process as any)?.env?.EXPO_PUBLIC_ACTU_DEBUG === "1") ||
+  false;
 
-  groupKey?: string;
-  groupCount?: number;
-};
+function dlog(...args: any[]) {
+  if (!DEBUG_ACTU) return;
+  // eslint-disable-next-line no-console
+  console.log(...args);
+}
 
 function toISO(input?: string | null): string {
   if (!input) return new Date().toISOString();
   const t = new Date(input).getTime();
   return Number.isFinite(t) ? new Date(t).toISOString() : new Date().toISOString();
-}
-
-function fmtDateFR(d: string) {
-  try {
-    return new Date(d).toLocaleDateString("fr-FR", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
-  } catch {
-    return d;
-  }
 }
 
 function daysAgo(dateISO: string) {
@@ -67,75 +63,6 @@ function bucketLabel(dateISO: string) {
   if (d <= 1) return "AUJOURD’HUI";
   if (d <= 7) return "CETTE SEMAINE";
   return "PLUS TÔT";
-}
-
-function gradientForTone(tone: Tone) {
-  switch (tone) {
-    case "pink":
-      return [
-        "rgba(244,114,182,0.32)",
-        "rgba(251,113,133,0.16)",
-        "rgba(2,6,23,0.00)",
-      ] as const;
-    case "mint":
-      return [
-        "rgba(52,211,153,0.28)",
-        "rgba(34,197,94,0.12)",
-        "rgba(2,6,23,0.00)",
-      ] as const;
-    case "amber":
-      return [
-        "rgba(251,191,36,0.30)",
-        "rgba(250,204,21,0.14)",
-        "rgba(2,6,23,0.00)",
-      ] as const;
-    case "violet":
-      return [
-        "rgba(167,139,250,0.32)",
-        "rgba(99,102,241,0.18)",
-        "rgba(2,6,23,0.00)",
-      ] as const;
-    case "blue":
-    default:
-      return [
-        "rgba(59,130,246,0.30)",
-        "rgba(14,165,233,0.14)",
-        "rgba(2,6,23,0.00)",
-      ] as const;
-  }
-}
-
-function accentForTone(tone: Tone) {
-  switch (tone) {
-    case "pink":
-      return "rgba(244,114,182,0.95)";
-    case "mint":
-      return "rgba(52,211,153,0.95)";
-    case "amber":
-      return "rgba(251,191,36,0.98)";
-    case "violet":
-      return "rgba(167,139,250,0.95)";
-    case "blue":
-    default:
-      return "rgba(59,130,246,0.95)";
-  }
-}
-
-function Icon({
-  lib,
-  name,
-  size = 18,
-  color = colors.text,
-}: {
-  lib: "ion" | "mci";
-  name: string;
-  size?: number;
-  color?: string;
-}) {
-  if (lib === "mci") {
-    return <MaterialCommunityIcons name={name as any} size={size} color={color} />;
-  }
-  return <Ionicons name={name as any} size={size} color={color} />;
 }
 
 type Row =
@@ -157,15 +84,13 @@ function pickIcon(it: ActuItemDB): { iconLib: "ion" | "mci"; iconName: string } 
   if (it.entity === "loi") return { iconLib: "ion", iconName: "document-text-outline" };
   if (it.entity === "amendement")
     return { iconLib: "mci", iconName: "file-document-edit-outline" };
-  if (it.entity === "motion")
-    return { iconLib: "mci", iconName: "alert-decagram-outline" };
+  if (it.entity === "motion") return { iconLib: "mci", iconName: "alert-decagram-outline" };
   if (it.entity === "declaration") return { iconLib: "mci", iconName: "bullhorn-outline" };
   return { iconLib: "ion", iconName: "sparkles" };
 }
 
 function pickTag(it: ActuItemDB): string | undefined {
   if ((it as any).tag) return String((it as any).tag);
-
   if (it.entity === "scrutin") return "Vote";
   if (it.entity === "loi") return "Loi";
   if (it.entity === "amendement") return "Amendement";
@@ -174,21 +99,8 @@ function pickTag(it: ActuItemDB): string | undefined {
   return undefined;
 }
 
-function mapDBToUI(it: ActuItemDB): ActuItemUI {
-  const { iconLib, iconName } = pickIcon(it);
-  return {
-    id: it.id,
-    dateISO: toISO(it.date),
-    title: (it as any).title ?? (it as any).titre ?? "Activité parlementaire",
-    subtitle:
-      (it as any).subtitle ||
-      (it as any).tldr ||
-      "À lire en clair : ce qui change, et pourquoi ça compte.",
-    tone: pickTone(it),
-    iconLib,
-    iconName,
-    tag: pickTag(it),
-  };
+function ctaLabel(_it: ActuItemUI) {
+  return "Voir le récit";
 }
 
 function SectionHeader({ title }: { title: string }) {
@@ -200,98 +112,13 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
-function HeroCard({ item, onPress }: { item: ActuItemUI; onPress: () => void }) {
-  const grad = gradientForTone(item.tone);
-  const accent = accentForTone(item.tone);
-
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.heroWrap, pressed && { opacity: 0.95 }]}
-    >
-      <LinearGradient
-        colors={grad as any}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.heroBg}
-      />
-      <View style={[styles.heroGlow, { shadowColor: accent }]} />
-
-      <View style={styles.heroTopRow}>
-        <View style={[styles.heroIconChip, { borderColor: accent }]}>
-          <Icon lib={item.iconLib} name={item.iconName} size={18} color={accent} />
-        </View>
-
-        <View style={styles.heroMetaRow}>
-          {item.tag ? (
-            <View style={styles.heroTagPill}>
-              <Text style={styles.heroTagText}>{item.tag}</Text>
-            </View>
-          ) : null}
-
-          <View style={styles.heroDatePill}>
-            <Text style={styles.heroDateText}>{fmtDateFR(item.dateISO)}</Text>
-          </View>
-        </View>
-      </View>
-
-      <Text style={styles.heroTitle} numberOfLines={3}>
-        {item.title}
-      </Text>
-      <Text style={styles.heroSubtitle} numberOfLines={3}>
-        {item.subtitle}
-      </Text>
-
-      <View style={styles.heroBottomRow}>
-        <View style={[styles.accentDot, { backgroundColor: accent }]} />
-        <Text style={styles.heroCta}>Comprendre maintenant</Text>
-        <Text style={styles.heroArrow}>→</Text>
-      </View>
-    </Pressable>
-  );
-}
-
-/**
- * ✅ Mapping group -> UI
- * - toujours préférer row.display.* (éditorial)
- * - id stable = groupKey
- */
-function mapGroupToUI(row: GroupedActuRow): ActuItemUI {
-  const items = row.items ?? [];
-  const first = items[0];
-
-  const base = first
-    ? mapDBToUI(first as any)
-    : mapDBToUI({
-        id: row.groupKey,
-        entity: row.entity,
-        date: row.dateMax,
-        title: row.display?.title ?? "Activité parlementaire",
-        subtitle: row.display?.subtitle ?? "",
-      } as any);
-
-  const title = row.display?.title || base.title;
-  const subtitle = row.display?.subtitle || base.subtitle;
-  const tag = row.display?.tag || base.tag;
-
-  return {
-    ...base,
-    id: row.groupKey,
-    dateISO: toISO(row.dateMax),
-    title,
-    subtitle,
-    tag,
-    groupKey: row.groupKey,
-    groupCount: items.length || row.summary?.total || 1,
-  };
-}
-
 /** ===== Hero editorial (anti-bruit) ===== */
-
 function isNoLoi(loi_id?: string | null) {
   return !loi_id || loi_id === "no-loi";
 }
-
+function cleanSpaces(s: string) {
+  return String(s ?? "").replace(/\s+/g, " ").trim();
+}
 function isGenericTitle(t?: string | null) {
   if (!t) return true;
   const s = t.toLowerCase();
@@ -301,14 +128,12 @@ function isGenericTitle(t?: string | null) {
     /\b\d+\s+scrutin/.test(s)
   );
 }
-
 function isNoiseGroup(g: GroupedActuRow) {
   const gg = g as any;
   const scr = gg.summary?.scrutins ?? 0;
   const loi_id: string | null | undefined = gg.loi_id ?? null;
   return isNoLoi(loi_id) && scr >= 12;
 }
-
 function pickHeroGroup(groups: GroupedActuRow[]) {
   if (!groups?.length) return null;
 
@@ -318,14 +143,12 @@ function pickHeroGroup(groups: GroupedActuRow[]) {
 
   const candidates = sorted.filter((g) => !isNoiseGroup(g));
 
-  // priorité: groupe lié à une loi (loi_id clair) récent (<=14j)
   const bestClearLoi = candidates.find((g) => !isNoLoi((g as any).loi_id ?? null));
   if (bestClearLoi) {
     const age = daysAgo(toISO((bestClearLoi as any).dateMax ?? null));
     if (age <= 14) return bestClearLoi;
   }
 
-  // sinon: groupe non générique
   const bestNonGeneric = candidates.find((g) => {
     const t = (g as any).display?.title ?? null;
     return !isGenericTitle(t);
@@ -335,23 +158,315 @@ function pickHeroGroup(groups: GroupedActuRow[]) {
   return candidates[0] ?? sorted[0] ?? null;
 }
 
-/** ===== Navigation fallback (anti écran rouge) =====
- * Route deterministe si route.href manquant / faux
- */
-function fallbackHrefFromItem(it: ActuItemDB): string | null {
-  const id = String(it?.id ?? "");
+/** ✅ Agrégation par loiKey (row.loi_id) pour afficher les "vrais" volumes */
+type LoiAgg = {
+  scrutins: number;
+  amendements: number;
+  articles: number;
+  total: number;
+  lastDateMax: string;
+};
 
-  // ✅ scrutin -> fiche scrutin
-  if (id.startsWith("scrutin-") || it?.entity === "scrutin") {
-    return `/scrutins/${encodeURIComponent(id)}`;
+function formatAggLine(agg?: LoiAgg) {
+  if (!agg) return undefined;
+  const parts: string[] = [];
+  if (agg.scrutins) parts.push(`${agg.scrutins} vote${agg.scrutins > 1 ? "s" : ""}`);
+  if (agg.amendements)
+    parts.push(`${agg.amendements} amendement${agg.amendements > 1 ? "s" : ""}`);
+  if (agg.articles) parts.push(`${agg.articles} article${agg.articles > 1 ? "s" : ""}`);
+  return parts.join(" • ");
+}
+
+function cleanOfficialTitle(raw: string, editorialTitle: string) {
+  const t = cleanSpaces(raw);
+  if (!t) return "";
+  if (cleanSpaces(editorialTitle).toLowerCase() === t.toLowerCase()) return "";
+  return t;
+}
+
+function normApos(s: string) {
+  return cleanSpaces(String(s ?? "")).replace(/[’]/g, "'");
+}
+
+function isVoteOnAmendement(officialRaw: string): boolean {
+  const s = normApos(officialRaw).toLowerCase();
+  return (
+    s.startsWith("l'amendement") ||
+    s.startsWith("amendement") ||
+    s.startsWith("sous-amendement") ||
+    s.includes("amendement identique")
+  );
+}
+
+function extractAmendementNumber(officialRaw: string): string {
+  const s = normApos(officialRaw);
+  const m = s.match(/\b(?:sous-)?amendement\b.*?\bn[°º]\s*(\d+)/i);
+  return m?.[1] ? String(m[1]).trim() : "";
+}
+
+function extractArticleRef(officialRaw: string): string {
+  const s = normApos(officialRaw);
+  const m = s.match(/\b(?:a|à)\s+l'article\s+([^()]+?)(?:\s+du|\s+de\s+la|\s+\(|\.|$)/i);
+  if (!m?.[1]) return "";
+  return cleanSpaces(m[1]).replace(/\s+et\s+annexe.*$/i, "").trim();
+}
+
+function buildAmendementKicker(officialRaw: string): string | null {
+  if (!officialRaw) return null;
+  if (!isVoteOnAmendement(officialRaw)) return null;
+
+  const num = extractAmendementNumber(officialRaw);
+  const art = extractArticleRef(officialRaw);
+
+  const parts: string[] = [];
+  parts.push(num ? `Amendement n°${num}` : "Amendement");
+  if (art) parts.push(`article ${art}`);
+
+  const out = cleanSpaces(parts.join(" • "));
+  return out || null;
+}
+
+/** ✅ Clé "coarse" : type + loiKey (sans date/phase) */
+function baseGroupKey(k: string) {
+  const parts = String(k ?? "").split("|");
+  return parts.length >= 2 ? `${parts[0]}|${parts[1]}` : k;
+}
+
+function secondaryLine(row: GroupedActuRow) {
+  const e = row.entity;
+  const phase = cleanSpaces((row as any)?.phase_label ?? "");
+
+  if (e === "scrutin") {
+    const first: any = (row as any)?.items?.[0] ?? {};
+    const officialRaw = first?.objet ?? first?.titre ?? first?.title ?? first?.subtitle ?? "";
+
+    const kicker = buildAmendementKicker(officialRaw);
+    if (kicker) return kicker;
+
+    return phase ? `Vote — ${phase}` : "Vote à l’Assemblée";
   }
 
-  // ✅ loi -> fiche loi (adapte si ta route loi n'est pas /lois/[id])
-  if (it?.entity === "loi") {
-    return `/lois/${encodeURIComponent(id)}`;
+  if (e === "amendement") return phase ? `Amendements — ${phase}` : "Modifications du texte";
+  if (e === "motion") return "Événement parlementaire";
+  if (e === "declaration") return "Déclaration politique";
+
+  return phase ? `Avancée — ${phase}` : "Dernières avancées";
+}
+
+function buildHighlights(row: GroupedActuRow): string[] {
+  const e = row.entity;
+  if (e === "scrutin") return ["En clair → preuves → étapes", "Positions des groupes + détail du vote"];
+  if (e === "amendement") return ["En clair → preuves → étapes", "Ce que ça change dans le texte"];
+  if (e === "motion") return ["En clair → preuves → étapes", "Pourquoi c’est arrivé"];
+  if (e === "declaration") return ["En clair → preuves → étapes", "Le message & ses conséquences"];
+  return ["En clair → preuves → étapes", "Suivi du dossier"];
+}
+
+function isBadListTitle(t?: string | null) {
+  const s = String(t ?? "").trim();
+  if (!s) return true;
+  const low = s.toLowerCase();
+  if (low === "m" || low === "mme" || low === "m.") return true;
+  if (low === "décider" || low === "decider") return true;
+  if (low === "décision" || low === "decision") return true;
+  if (low === "vote à l’assemblée" || low === "vote a l’assemblee") return true;
+  if (low.includes("activité parlementaire")) return true;
+  return false;
+}
+function fallbackTitleForEntity(entity: string) {
+  if (entity === "amendement") return "Modifier le texte de loi";
+  if (entity === "scrutin") return "Vote à l’Assemblée";
+  if (entity === "declaration") return "Déclaration politique";
+  if (entity === "motion") return "Événement parlementaire";
+  return "Avancée législative";
+}
+function maybePrefixLoi(entity: string, t: string) {
+  if (entity !== "loi") return t;
+  const clean = String(t ?? "").trim();
+  if (!clean) return clean;
+  if (/^loi\s*:?/i.test(clean)) return clean.replace(/^loi\s*:?/i, "Loi :").trim();
+  return `Loi : ${clean}`;
+}
+
+/** =========================
+ *  DEBUG HELPERS (TOP loi_id)
+ * ========================= */
+function short(s: any, max = 90) {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length <= max ? t : t.slice(0, max) + "…";
+}
+
+function pickExampleTitle(it: any): string {
+  const raw = String(it?.title ?? it?.objet ?? it?.titre ?? it?.subtitle ?? "").trim();
+  return raw ? short(raw, 90) : "";
+}
+
+function normalizeLoiIdForLogs(v: any): string {
+  const s = String(v ?? "").trim();
+  return s ? s : "no-loi";
+}
+
+function isNoLoiId(loiId: string) {
+  const s = String(loiId ?? "").trim();
+  return !s || s === "no-loi";
+}
+
+/** ✅ IMPORTANT: "suspicious" = ID événement (numérique), PAS "scrutin-public-..." */
+function isEventIdLike(loiId: string) {
+  const s = String(loiId ?? "").trim();
+  if (!s) return false;
+  if (/^scrutin-\d+$/i.test(s)) return true;
+  if (/^motion-\d+$/i.test(s)) return true;
+  if (/^declaration-\d+$/i.test(s)) return true;
+  return false;
+}
+
+/** ✅ Mini-log ratio loi_id (rawDB) : eventIdLike vs no-loi vs ok */
+function logSuspiciousRatioInRawDB(rawDB: ActuItemDB[]) {
+  const total = rawDB?.length ?? 0;
+  if (!total) return;
+
+  let eventLike = 0;
+  let noLoi = 0;
+  let ok = 0;
+
+  const byPrefix = { scrutin: 0, motion: 0, declaration: 0 };
+
+  const eventExamples: { loiId: string; ex: string }[] = [];
+  const okExamples: { loiId: string; ex: string }[] = [];
+  const noLoiExamples: { loiId: string; ex: string }[] = [];
+
+  for (const it of rawDB as any[]) {
+    const loiId = normalizeLoiIdForLogs((it as any)?.loi_id);
+    const ex = pickExampleTitle(it);
+
+    if (isNoLoiId(loiId)) {
+      noLoi += 1;
+      if (noLoiExamples.length < 2) noLoiExamples.push({ loiId, ex });
+      continue;
+    }
+
+    if (isEventIdLike(loiId)) {
+      eventLike += 1;
+      if (loiId.startsWith("scrutin-")) byPrefix.scrutin += 1;
+      else if (loiId.startsWith("motion-")) byPrefix.motion += 1;
+      else if (loiId.startsWith("declaration-")) byPrefix.declaration += 1;
+
+      if (eventExamples.length < 2) eventExamples.push({ loiId, ex });
+      continue;
+    }
+
+    ok += 1;
+    if (okExamples.length < 2) okExamples.push({ loiId, ex });
   }
 
-  return null;
+  const pct = (n: number) => (total ? Math.round((n / total) * 1000) / 10 : 0);
+
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  dlog(
+    `[ACTU] ratio loi_id (rawDB): eventIdLike=${pct(eventLike)}% (${eventLike}/${total}) | no-loi=${pct(
+      noLoi
+    )}% (${noLoi}/${total}) | ok=${pct(ok)}% (${ok}/${total})`
+  );
+  dlog(
+    `[ACTU] eventIdLike breakdown: scrutin=${byPrefix.scrutin}, motion=${byPrefix.motion}, declaration=${byPrefix.declaration}`
+  );
+
+  if (eventExamples.length) {
+    dlog(
+      `[ACTU] exemples eventIdLike: ${eventExamples
+        .map((x) => `${short(x.loiId, 70)} | ex="${x.ex}"`)
+        .join("  ||  ")}`
+    );
+  }
+  if (noLoiExamples.length) {
+    dlog(
+      `[ACTU] exemples no-loi: ${noLoiExamples
+        .map((x) => `${short(x.loiId, 70)} | ex="${x.ex}"`)
+        .join("  ||  ")}`
+    );
+  }
+  if (okExamples.length) {
+    dlog(
+      `[ACTU] exemples ok: ${okExamples
+        .map((x) => `${short(x.loiId, 70)} | ex="${x.ex}"`)
+        .join("  ||  ")}`
+    );
+  }
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+function logTopLoiIdInRawDB(rawDB: ActuItemDB[], topN = 12) {
+  const total = rawDB?.length ?? 0;
+  if (!total) return;
+
+  const map = new Map<string, { count: number; exTitle: string }>();
+
+  for (const it of rawDB as any[]) {
+    const loiId = normalizeLoiIdForLogs((it as any)?.loi_id);
+    const prev = map.get(loiId);
+    if (!prev) {
+      map.set(loiId, { count: 1, exTitle: pickExampleTitle(it) });
+    } else {
+      prev.count += 1;
+      if (!prev.exTitle) prev.exTitle = pickExampleTitle(it);
+      map.set(loiId, prev);
+    }
+  }
+
+  const top = [...map.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, topN);
+
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  dlog(`[ACTU] TOP loi_id dans rawDB (nb items + ex "titre")`);
+
+  top.forEach(([loiId, meta], i) => {
+    const flag = isEventIdLike(loiId) ? "⚠️ " : "";
+    const ex = meta.exTitle ? ` | ex="${meta.exTitle}"` : "";
+    dlog(`#${i + 1} ${flag}${meta.count} | ${short(loiId, 110)}${ex}`);
+  });
+
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+function logTopLoiIdInGroups(groups: any[], topN = 12) {
+  const total = groups?.length ?? 0;
+  if (!total) return;
+
+  const counts = new Map<string, number>();
+
+  for (const g of groups as any[]) {
+    const loiId = normalizeLoiIdForLogs(g?.loi_id);
+    const n = Number(g?.summary?.total ?? g?.items?.length ?? 0);
+    if (!n) continue;
+    counts.set(loiId, (counts.get(loiId) ?? 0) + n);
+  }
+
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN);
+
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  dlog("[ACTU] TOP loi_id dans groupedRows (COARSE) (somme totals)");
+  top.forEach(([k, n], i) => dlog(`#${i + 1} ${n} | ${short(k, 110)}`));
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+/** ✅ NEW: log brut des "no-loi" pour identifier la source */
+function logNoLoiSample(rawDB: ActuItemDB[], maxRows = 12) {
+  const total = rawDB?.length ?? 0;
+  if (!total) return;
+
+  const no = (rawDB ?? []).filter((x: any) => !x?.loi_id || x.loi_id === "no-loi");
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  dlog(`[ACTU] no-loi sample (${no.length})`);
+  no.slice(0, maxRows).forEach((it: any, i: number) => {
+    dlog(
+      `#${i + 1} entity=${it.entity} id=${short(it.id, 80)} | titre="${short(
+        it.title ?? it.objet ?? it.titre ?? "",
+        110
+      )}"`
+    );
+  });
+  dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
 
 export default function ActuIndexScreen() {
@@ -394,27 +509,286 @@ export default function ActuIndexScreen() {
     }
   }, [load]);
 
-  const groupedRows = useMemo(() => groupActuItems(rawDB as any), [rawDB]);
+  /**
+   * ✅ FIX: fallback loi_id -> id (slug stable)
+   * - évite "no-loi"
+   * - stabilise group/coarse/agg pour motions/déclarations aussi
+   */
+  const rawDBFixed = useMemo(() => {
+    return (rawDB ?? []).map((it: any) => {
+      const loiId = (it?.loi_id ?? "").toString().trim();
+      if (loiId) return it;
 
-  const itemById = useMemo(() => {
-    const m = new Map<string, ActuItemDB>();
-    for (const it of rawDB) m.set(it.id, it);
-    return m;
+      if (it?.id) {
+        return { ...it, loi_id: String(it.id) };
+      }
+
+      return it;
+    });
   }, [rawDB]);
 
-  const rawUI = useMemo(() => groupedRows.map(mapGroupToUI), [groupedRows]);
+  /** STRICT (tel que groupActuItems) */
+  const groupedRowsStrict = useMemo(() => groupActuItems(rawDBFixed as any), [rawDBFixed]);
+
+  /** ✅ COARSE (stable, pour l’UX Actu) */
+  const groupedRowsCoarse = useMemo(() => {
+    const map = new Map<string, any>();
+
+    for (const g of groupedRowsStrict as any[]) {
+      const k0 = baseGroupKey(g.groupKey);
+      const prev = map.get(k0);
+
+      if (!prev) {
+        map.set(k0, {
+          ...g,
+          groupKey: k0,
+          items: [...(g.items ?? [])],
+          summary: { ...(g.summary ?? {}) },
+          dateMax: g.dateMax,
+        });
+        continue;
+      }
+
+      prev.items.push(...(g.items ?? []));
+
+      prev.summary = {
+        total: prev.items.length,
+        scrutins: (prev.summary?.scrutins ?? 0) + (g.summary?.scrutins ?? 0),
+        amendements: (prev.summary?.amendements ?? 0) + (g.summary?.amendements ?? 0),
+        articles: (prev.summary?.articles ?? 0) + (g.summary?.articles ?? 0),
+      };
+
+      prev.dateMax = [prev.dateMax, g.dateMax].filter(Boolean).sort().pop();
+    }
+
+    const out = Array.from(map.values());
+
+    out.forEach((gg) => {
+      gg.items.sort((a: any, b: any) => String(b?.date ?? "").localeCompare(String(a?.date ?? "")));
+
+      // 1) truth
+      const realTotal = gg.items.length;
+      gg.summary = gg.summary ?? {};
+      gg.summary.total = Number(gg.summary.total ?? realTotal) || realTotal;
+
+      // 2) cap preview
+      if (ACTU_FEED_MAX_ITEMS_PER_STORY > 0 && gg.items.length > ACTU_FEED_MAX_ITEMS_PER_STORY) {
+        gg.items = gg.items.slice(0, ACTU_FEED_MAX_ITEMS_PER_STORY);
+      }
+    });
+
+    out.sort((a, b) => String(b?.dateMax ?? "").localeCompare(String(a?.dateMax ?? "")));
+    return out;
+  }, [groupedRowsStrict]);
+
+  /** ✅ Actu = COARSE */
+  const groupedRows = groupedRowsCoarse;
+
+  /** ✅ build agg map by loi_id (loiKey) depuis COARSE */
+  const loiAggMap = useMemo(() => {
+    const m = new Map<string, LoiAgg>();
+
+    for (const g of groupedRows) {
+      const loiKey = normalizeLoiIdForLogs((g as any).loi_id);
+      if (!loiKey || loiKey === "no-loi") continue;
+
+      const prev =
+        m.get(loiKey) ??
+        ({
+          scrutins: 0,
+          amendements: 0,
+          articles: 0,
+          total: 0,
+          lastDateMax: "",
+        } as LoiAgg);
+
+      prev.scrutins += Number(g.summary?.scrutins ?? 0);
+      prev.amendements += Number(g.summary?.amendements ?? 0);
+      prev.articles += Number(g.summary?.articles ?? 0);
+      prev.total += Number(g.summary?.total ?? 0);
+
+      const d = String((g as any).dateMax ?? "");
+      if (d && d > prev.lastDateMax) prev.lastDateMax = d;
+
+      m.set(loiKey, prev);
+    }
+
+    return m;
+  }, [groupedRows]);
+
+  /** Logs (STRICT + COARSE + TOP loi_id + ratio + no-loi sample) */
+  useEffect(() => {
+    if (!DEBUG_ACTU) return;
+
+    logSuspiciousRatioInRawDB(rawDBFixed);
+    logTopLoiIdInRawDB(rawDBFixed, 12);
+    logNoLoiSample(rawDBFixed, 12);
+
+    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    dlog("[ACTU] TOP RECITS (STRICT)");
+    [...groupedRowsStrict]
+      .map((g: any) => ({
+        key: g.groupKey,
+        title: g?.display?.title ?? "",
+        total: g?.summary?.total ?? g?.items?.length ?? 0,
+        scr: g?.summary?.scrutins ?? 0,
+        amd: g?.summary?.amendements ?? 0,
+        art: g?.summary?.articles ?? 0,
+        entity: g?.entity ?? "",
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 8)
+      .forEach((x, i) => {
+        dlog(
+          `#${i + 1} total=${x.total} scr=${x.scr} amd=${x.amd} art=${x.art} entity=${x.entity} | ${x.title} | key=${x.key}`
+        );
+      });
+    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    dlog("[ACTU] TOP RECITS (COARSE)");
+    groupedRowsCoarse.slice(0, 8).forEach((g: any, i: number) => {
+      dlog(
+        `#${i + 1} total=${g.summary?.total ?? 0} preview=${g.items?.length ?? 0} scr=${
+          g.summary?.scrutins ?? 0
+        } amd=${g.summary?.amendements ?? 0} art=${g.summary?.articles ?? 0} | ${
+          g.display?.title ?? ""
+        } | key=${g.groupKey}`
+      );
+    });
+    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    dlog("[ACTU] TOP RECITS (COARSE by total)");
+    [...groupedRowsCoarse]
+      .map((g: any) => ({
+        key: g.groupKey,
+        title: g?.display?.title ?? "",
+        total: g?.summary?.total ?? 0,
+        preview: g?.items?.length ?? 0,
+        scr: g?.summary?.scrutins ?? 0,
+        amd: g?.summary?.amendements ?? 0,
+        art: g?.summary?.articles ?? 0,
+      }))
+      .sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
+      .slice(0, 8)
+      .forEach((x, i) => {
+        dlog(
+          `#${i + 1} total=${x.total} preview=${x.preview} scr=${x.scr} amd=${x.amd} art=${x.art} | ${x.title} | key=${x.key}`
+        );
+      });
+    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    logTopLoiIdInGroups(groupedRowsCoarse as any[], 12);
+  }, [rawDBFixed, groupedRowsStrict, groupedRowsCoarse]);
+
+  const rawUI: ActuItemUI[] = useMemo(() => {
+    return groupedRows.map((row) => {
+      const items = row.items ?? [];
+      const first = items[0];
+
+      const baseDB: ActuItemDB =
+        (first as any) ??
+        ({
+          id: row.groupKey,
+          entity: row.entity,
+          date: (row as any).dateMax,
+        } as any);
+
+      const { iconLib, iconName } = pickIcon(baseDB);
+
+      const displayTitle = cleanSpaces((row as any)?.display?.title ?? "");
+      let editorial = displayTitle;
+
+      let usedFallback = false;
+      if (isBadListTitle(editorial)) {
+        editorial = fallbackTitleForEntity(String(row.entity));
+        usedFallback = true;
+      }
+
+      const editorialTitle = maybePrefixLoi(String(row.entity), editorial);
+
+      const officialRaw =
+        (first as any)?.objet ??
+        (first as any)?.titre ??
+        (first as any)?.title ??
+        (first as any)?.subtitle ??
+        "";
+
+      const longTitleFromGrouping = cleanSpaces((row as any)?.display?.longTitle ?? "");
+      const longSeed = longTitleFromGrouping || officialRaw;
+
+      const longTitleClean = cleanOfficialTitle(longSeed, editorialTitle);
+      const longTitle = longTitleClean ? longTitleClean : undefined;
+
+      const loiKey = normalizeLoiIdForLogs((row as any).loi_id);
+      const agg = loiKey ? loiAggMap.get(loiKey) : undefined;
+
+      const statsLine =
+        formatAggLine(agg) ??
+        formatAggLine({
+          scrutins: Number(row.summary?.scrutins ?? 0),
+          amendements: Number(row.summary?.amendements ?? 0),
+          articles: Number(row.summary?.articles ?? 0),
+          total: Number(row.summary?.total ?? 0),
+          lastDateMax: String((row as any).dateMax ?? ""),
+        });
+
+      const tag = (row as any).display?.tag || pickTag(baseDB);
+
+      const ui: ActuItemUI = {
+        id: row.groupKey,
+        dateISO: toISO((row as any).dateMax),
+        title: editorialTitle,
+        longTitle,
+        subtitle: secondaryLine(row),
+        tone: pickTone(baseDB),
+        iconLib,
+        iconName,
+        tag,
+        statsLine,
+        highlights: buildHighlights(row),
+        groupKey: row.groupKey,
+
+        // ✅ truth
+        groupCount: Number(row.summary?.total ?? 0) || items.length || 1,
+
+        // ✅ preview réellement affichée dans le feed
+        previewCount: items.length,
+      };
+
+      (ui as any).__debug = {
+        entity: row.entity,
+        usedFallback,
+        displayTitle,
+        editorialTitle,
+        loiKey,
+        dateMax: (row as any)?.dateMax ?? null,
+        officialRaw,
+        groupKey: row.groupKey,
+        counts: row.summary,
+        firstId: (first as any)?.id ?? null,
+        previewCount: items.length,
+        totalReal: row.summary?.total,
+      };
+
+      return ui;
+    });
+  }, [groupedRows, loiAggMap]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return rawUI;
     return rawUI.filter((x) =>
-      (`${x.title} ${x.subtitle} ${x.tag ?? ""}`).toLowerCase().includes(s)
+      (`${x.title} ${x.subtitle} ${x.statsLine ?? ""} ${x.longTitle ?? ""}`)
+        .toLowerCase()
+        .includes(s)
     );
   }, [q, rawUI]);
 
   const rows: Row[] = useMemo(() => {
     const heroGroup = pickHeroGroup(groupedRows);
-    const heroUI = heroGroup ? mapGroupToUI(heroGroup) : null;
+    const heroUI = heroGroup ? rawUI.find((x) => x.id === heroGroup.groupKey) ?? null : null;
 
     const heroId = heroUI?.id;
     const baseList = heroId ? filtered.filter((x) => x.id !== heroId) : filtered;
@@ -434,128 +808,62 @@ export default function ActuIndexScreen() {
       out.push({ kind: "item", item: it });
     }
     return out;
-  }, [filtered, groupedRows]);
+  }, [filtered, groupedRows, rawUI]);
 
-  const openById = useCallback(
-    (id: string) => {
-      const db = rawDB.find((x) => x.id === id);
-      if (!db) return;
-
-      const href = (db as any)?.route?.href ?? fallbackHrefFromItem(db);
-      if (href) router.push(href as any);
-    },
-    [rawDB, router]
-  );
-
+  /** Actu -> group (récit) */
   const openGroup = useCallback(
     (ui: ActuItemUI) => {
-      const key = ui.groupKey;
+      const key = ui.groupKey || ui.id;
+      if (!key) return;
 
-      if (!key) {
-        openById(ui.id);
-        return;
-      }
+      const href = `/actu/group/${encodeURIComponent(String(key))}`;
 
-      // si groupe 1 item -> ouvrir l'item
-      if ((ui.groupCount ?? 0) <= 1) {
-        const g = (groupedRows as any[]).find((x) => String(x.groupKey) === String(key));
-        const only = g?.items?.[0];
-        if (only?.id) {
-          const db = itemById.get(only.id);
-          const href = (db as any)?.route?.href ?? (db ? fallbackHrefFromItem(db) : null);
-          if (href) {
-            router.push(href as any);
-            return;
-          }
-        }
-      }
+      // eslint-disable-next-line no-console
+      console.log("[ACTU CLICK]", {
+        title: ui.title,
+        groupKey: ui.groupKey,
+        id: ui.id,
+        tag: ui.tag,
+        dateISO: ui.dateISO,
+        href,
+      });
 
-      // sinon -> écran groupe
-      router.push(`/actu/group/${encodeURIComponent(key)}` as any);
+      router.push(href as any);
     },
-    [groupedRows, itemById, openById, router]
+    [router]
   );
 
   const renderRow = ({ item }: { item: Row }) => {
     if (item.kind === "hero") {
       return (
-        <View style={{ marginBottom: 6 }}>
-          <Text style={styles.heroLabel}>À LA UNE</Text>
-          <HeroCard item={item.item} onPress={() => openGroup(item.item)} />
-        </View>
+        <HeroActuCard
+          item={item.item as any}
+          cta={ctaLabel(item.item)}
+          onPress={() => openGroup(item.item)}
+        />
       );
     }
-
     if (item.kind === "header") return <SectionHeader title={item.title} />;
 
     const it = item.item;
-    const grad = gradientForTone(it.tone);
-    const accent = accentForTone(it.tone);
-
-    return (
-      <Pressable
-        style={({ pressed }) => [styles.card, pressed && { opacity: 0.96 }]}
-        onPress={() => openGroup(it)}
-        android_ripple={{ color: "rgba(255,255,255,0.06)" }}
-      >
-        <LinearGradient
-          colors={grad as any}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.cardBg}
-        />
-        <View style={[styles.accentBar, { backgroundColor: accent }]} />
-
-        <View style={styles.topRow}>
-          <View style={[styles.iconChip, { borderColor: accent }]}>
-            <Icon lib={it.iconLib} name={it.iconName} size={18} color={accent} />
-          </View>
-
-          <View style={styles.metaRow}>
-            {it.tag ? (
-              <View style={styles.tagPill}>
-                <Text style={styles.tagText} numberOfLines={1} ellipsizeMode="tail">
-                  {it.tag}
-                </Text>
-              </View>
-            ) : null}
-
-            {(it.groupCount ?? 0) > 1 ? (
-              <View style={styles.countPill}>
-                <Text style={styles.countText}>+{it.groupCount}</Text>
-              </View>
-            ) : null}
-
-            <View style={styles.datePill}>
-              <Text style={styles.dateText}>{fmtDateFR(it.dateISO)}</Text>
-            </View>
-          </View>
-        </View>
-
-        <Text style={styles.title} numberOfLines={2}>
-          {it.title}
-        </Text>
-        <Text style={styles.subtitle} numberOfLines={2}>
-          {it.subtitle}
-        </Text>
-
-        <View style={styles.bottomRow}>
-          <Text style={styles.bottomHint} numberOfLines={1} ellipsizeMode="tail">
-            {(it.groupCount ?? 0) > 1 ? "Voir le détail" : "Comprendre"}
-          </Text>
-          <View style={styles.ctaRight}>
-            <Text style={styles.ctaText}>→</Text>
-          </View>
-        </View>
-      </Pressable>
-    );
+    return <ActuCard item={it as any} cta={ctaLabel(it)} onPress={() => openGroup(it)} />;
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <View style={styles.hTitleRow}>
-          <Text style={styles.h1}>Actu</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Text style={styles.h1}>Actu</Text>
+
+            {DEBUG_ACTU && (
+              <View style={styles.debugPill}>
+                <Ionicons name="bug-outline" size={14} color={colors.text} />
+                <Text style={styles.debugPillText}>DEBUG</Text>
+              </View>
+            )}
+          </View>
+
           <View style={styles.hBadge}>
             <Ionicons name="pulse-outline" size={14} color={colors.text} />
             <Text style={styles.hBadgeText}>Temps réel</Text>
@@ -621,12 +929,7 @@ export default function ActuIndexScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
 
-  header: {
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
-    gap: 8,
-  },
+  header: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12, gap: 8 },
 
   hTitleRow: {
     flexDirection: "row",
@@ -635,6 +938,20 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   h1: { color: colors.text, fontSize: 24, fontWeight: "900", letterSpacing: 0.2 },
+
+  debugPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  debugPillText: { color: colors.text, fontSize: 12, fontWeight: "900", letterSpacing: 0.6 },
+
   hBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -665,150 +982,4 @@ const styles = StyleSheet.create({
   sectionHeader: { paddingTop: 8, paddingBottom: 2, gap: 8 },
   sectionTitle: { color: colors.subtext, fontSize: 12, fontWeight: "900", letterSpacing: 1.2 },
   sectionLine: { height: 1, backgroundColor: "rgba(255,255,255,0.08)" },
-
-  heroLabel: {
-    color: colors.subtext,
-    fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 1.2,
-    marginBottom: 8,
-  },
-
-  heroWrap: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    overflow: "hidden",
-    backgroundColor: colors.card,
-    padding: 14,
-  },
-  heroBg: { ...StyleSheet.absoluteFillObject },
-  heroGlow: {
-    position: "absolute",
-    top: -10,
-    right: -20,
-    width: 140,
-    height: 140,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    shadowOpacity: 0.55,
-    shadowRadius: 26,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 8,
-  },
-  heroTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  heroIconChip: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  heroMetaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  heroTagPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  heroTagText: { color: colors.text, fontSize: 12, fontWeight: "900" },
-  heroDatePill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  heroDateText: { color: colors.subtext, fontSize: 12, fontWeight: "800" },
-
-  heroTitle: { marginTop: 12, color: colors.text, fontSize: 18, fontWeight: "900", lineHeight: 24 },
-  heroSubtitle: { marginTop: 8, color: colors.subtext, fontSize: 13, lineHeight: 18, fontWeight: "700" },
-
-  heroBottomRow: { marginTop: 14, flexDirection: "row", alignItems: "center", gap: 8 },
-  heroCta: { color: colors.text, fontSize: 13, fontWeight: "900", flex: 1 },
-  heroArrow: { color: colors.text, fontSize: 16, fontWeight: "900" },
-
-  card: {
-    position: "relative",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    overflow: "hidden",
-    backgroundColor: colors.card,
-    padding: 12,
-    gap: 8,
-  },
-  cardBg: { ...StyleSheet.absoluteFillObject },
-
-  accentBar: { position: "absolute", left: 0, top: 0, bottom: 0, width: 4, opacity: 0.75 },
-
-  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-
-  iconChip: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    borderWidth: 1,
-    backgroundColor: "rgba(255,255,255,0.04)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  metaRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-
-  tagPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-    maxWidth: 160,
-  },
-  tagText: { color: colors.text, fontSize: 12, fontWeight: "900" },
-
-  countPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  countText: { color: colors.text, fontSize: 12, fontWeight: "900" },
-
-  datePill: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  dateText: { color: colors.subtext, fontSize: 12, fontWeight: "800" },
-
-  title: { color: colors.text, fontSize: 15, fontWeight: "900", lineHeight: 20 },
-  subtitle: { color: colors.subtext, fontSize: 12, lineHeight: 17, fontWeight: "700" },
-
-  bottomRow: { marginTop: 2, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  bottomHint: { color: colors.text, fontSize: 12, fontWeight: "900", maxWidth: "75%" },
-
-  accentDot: { width: 8, height: 8, borderRadius: 99 },
-
-  ctaRight: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
-  },
-  ctaText: { color: colors.text, fontSize: 16, fontWeight: "900" },
 });

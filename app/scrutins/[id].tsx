@@ -6,7 +6,6 @@ import {
   Animated,
   Image,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -339,11 +338,7 @@ const Chip = ({ label, tone }: { label: string; tone?: "accent" | "neutral" }) =
   </View>
 );
 
-const Stat = (props: {
-  label: string;
-  value: number;
-  tone: "good" | "bad" | "warn";
-}) => {
+const Stat = (props: { label: string; value: number; tone: "good" | "bad" | "warn" }) => {
   const { label, value, tone } = props;
   const color =
     tone === "good"
@@ -415,11 +410,7 @@ export default function ScrutinDetailScreen() {
    * ✅ stable (ta logique actuelle), on ne la change pas.
    */
   const loadLoiEtTimeline = useCallback(
-    async (
-      numeroVotes: string,
-      scrutinKey?: string,
-      preferredLoiId?: string
-    ) => {
+    async (numeroVotes: string, scrutinKey?: string, preferredLoiId?: string) => {
       try {
         setLoiLoading(true);
 
@@ -434,9 +425,7 @@ export default function ScrutinDetailScreen() {
           by: "id_an" | "numero" | "loi_id_eq" | "loi_id_ilike" | "numero_ilike";
           value: string;
         }) => {
-          const base: any = supabase
-            .from("scrutins_data")
-            .select("loi_id, date_scrutin");
+          const base: any = supabase.from("scrutins_data").select("loi_id, date_scrutin");
 
           const applyWhere = (b: any) => {
             if (q.by === "id_an") return b.eq("id_an", q.value);
@@ -458,24 +447,16 @@ export default function ScrutinDetailScreen() {
           const details = String((r1.error as any)?.details ?? "").toLowerCase();
           const looksLikeMissingCol =
             msg.includes("does not exist") &&
-            (msg.includes("legislature") ||
-              hint.includes("legislature") ||
-              details.includes("legislature"));
+            (msg.includes("legislature") || hint.includes("legislature") || details.includes("legislature"));
 
           if (!looksLikeMissingCol) return r1;
 
-          const r2 = await applyWhere(base)
-            .order("date_scrutin", { ascending: false })
-            .limit(1);
-
+          const r2 = await applyWhere(base).order("date_scrutin", { ascending: false }).limit(1);
           return r2;
         };
 
         if (!loiIdScrutin && looksLikeIdAn(key)) {
-          const { data, error: e } = await scrutinsDataSelectOne({
-            by: "id_an",
-            value: key,
-          });
+          const { data, error: e } = await scrutinsDataSelectOne({ by: "id_an", value: key });
           if (e) console.warn("[SCRUTIN DETAIL] Erreur lookup id_an:", e);
           else if (Array.isArray(data) && data.length > 0 && (data[0] as any)?.loi_id) {
             loiIdScrutin = String((data[0] as any).loi_id);
@@ -485,10 +466,7 @@ export default function ScrutinDetailScreen() {
         if (!loiIdScrutin) {
           const digits = normalizeDigitsOnly(key) || normalizeDigitsOnly(numeroVotes);
           if (digits) {
-            const { data, error: e } = await scrutinsDataSelectOne({
-              by: "numero",
-              value: String(digits).trim(),
-            });
+            const { data, error: e } = await scrutinsDataSelectOne({ by: "numero", value: String(digits).trim() });
             if (e) console.warn("[SCRUTIN DETAIL] Erreur lookup numero:", e);
             else if (Array.isArray(data) && data.length > 0 && (data[0] as any)?.loi_id) {
               loiIdScrutin = String((data[0] as any).loi_id);
@@ -497,20 +475,14 @@ export default function ScrutinDetailScreen() {
         }
 
         if (!loiIdScrutin && looksLikeScrutinSlug(key)) {
-          const { data, error: e } = await scrutinsDataSelectOne({
-            by: "loi_id_eq",
-            value: key,
-          });
+          const { data, error: e } = await scrutinsDataSelectOne({ by: "loi_id_eq", value: key });
           if (e) console.warn("[SCRUTIN DETAIL] Erreur lookup loi_id(eq):", e);
           else if (Array.isArray(data) && data.length > 0 && (data[0] as any)?.loi_id) {
             loiIdScrutin = String((data[0] as any).loi_id);
           }
 
           if (!loiIdScrutin) {
-            const { data: d2, error: e2 } = await scrutinsDataSelectOne({
-              by: "loi_id_ilike",
-              value: key,
-            });
+            const { data: d2, error: e2 } = await scrutinsDataSelectOne({ by: "loi_id_ilike", value: key });
             if (e2) console.warn("[SCRUTIN DETAIL] Erreur lookup loi_id(ilike):", e2);
             else if (Array.isArray(d2) && d2.length > 0 && (d2[0] as any)?.loi_id) {
               loiIdScrutin = String((d2[0] as any).loi_id);
@@ -521,20 +493,14 @@ export default function ScrutinDetailScreen() {
         if (!loiIdScrutin) {
           const probe = normalizeDigitsOnly(numeroVotes) || String(numeroVotes).trim();
 
-          const { data, error: e } = await scrutinsDataSelectOne({
-            by: "numero",
-            value: probe,
-          });
+          const { data, error: e } = await scrutinsDataSelectOne({ by: "numero", value: probe });
           if (e) console.warn("[SCRUTIN DETAIL] Erreur lookup numero(fallback):", e);
           else if (Array.isArray(data) && data.length > 0 && (data[0] as any)?.loi_id) {
             loiIdScrutin = String((data[0] as any).loi_id);
           }
 
           if (!loiIdScrutin) {
-            const { data: d2, error: e2 } = await scrutinsDataSelectOne({
-              by: "numero_ilike",
-              value: probe,
-            });
+            const { data: d2, error: e2 } = await scrutinsDataSelectOne({ by: "numero_ilike", value: probe });
             if (e2) console.warn("[SCRUTIN DETAIL] Erreur lookup numero(ilike):", e2);
             else if (Array.isArray(d2) && d2.length > 0 && (d2[0] as any)?.loi_id) {
               loiIdScrutin = String((d2[0] as any).loi_id);
@@ -550,8 +516,7 @@ export default function ScrutinDetailScreen() {
 
         let loiKeyCanon: string | null = null;
 
-        const numeroProbe =
-          normalizeDigitsOnly(numeroVotes) || String(numeroVotes).trim();
+        const numeroProbe = normalizeDigitsOnly(numeroVotes) || String(numeroVotes).trim();
 
         if (numeroProbe) {
           const { data: rel, error: relErr } = await supabase
@@ -802,10 +767,8 @@ export default function ScrutinDetailScreen() {
   }, [votes]);
 
   const nbPour: number = syntheseVotes?.nb_pour ?? (scrutin as any)?.nb_pour ?? 0;
-  const nbContre: number =
-    syntheseVotes?.nb_contre ?? (scrutin as any)?.nb_contre ?? 0;
-  const nbAbst: number =
-    syntheseVotes?.nb_abstention ?? (scrutin as any)?.nb_abstention ?? 0;
+  const nbContre: number = syntheseVotes?.nb_contre ?? (scrutin as any)?.nb_contre ?? 0;
+  const nbAbst: number = syntheseVotes?.nb_abstention ?? (scrutin as any)?.nb_abstention ?? 0;
 
   const totalExpr: number = nbPour + nbContre + nbAbst;
   const pourPct = totalExpr > 0 ? Math.round((nbPour * 100) / totalExpr) : 0;
@@ -822,8 +785,7 @@ export default function ScrutinDetailScreen() {
     (scrutin as any)?.objet_scrutin ??
     "Scrutin parlementaire";
 
-  const dateLabel =
-    formatDateFR((scrutin as any)?.date_scrutin || (scrutin as any)?.date) ?? null;
+  const dateLabel = formatDateFR((scrutin as any)?.date_scrutin || (scrutin as any)?.date) ?? null;
 
   const resultLabel = computeResultLabel(scrutin as any, nbPour, nbContre);
   const major = majorityLabel(nbPour, nbContre, nbAbst);
@@ -831,7 +793,6 @@ export default function ScrutinDetailScreen() {
   const numeroForRoutes = resolvedNumero ?? "";
   const timelineToShow = showAllTimeline ? timeline : timeline.slice(0, 3);
   const groupsToShow = showAllGroups ? groupedVotes : groupedVotes.slice(0, 6);
-
   const groupsCount = groupedVotes.length;
 
   if (loading) {
@@ -898,10 +859,9 @@ export default function ScrutinDetailScreen() {
       <Animated.ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true }
-        )}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: true,
+        })}
         scrollEventThrottle={16}
       >
         {/* ✅ HERO “Wahou” */}
@@ -937,10 +897,7 @@ export default function ScrutinDetailScreen() {
 
             <Pressable
               onPress={() => setExpandTitle((s) => !s)}
-              style={({ pressed }) => [
-                styles.heroTitleWrap,
-                pressed && { opacity: 0.96 },
-              ]}
+              style={({ pressed }) => [styles.heroTitleWrap, pressed && { opacity: 0.96 }]}
             >
               <Text style={styles.heroTitle} numberOfLines={expandTitle ? 8 : 3}>
                 {titre}
@@ -948,24 +905,20 @@ export default function ScrutinDetailScreen() {
               <Text style={styles.heroSubtitle} numberOfLines={expandTitle ? 5 : 2}>
                 {objetShort}
               </Text>
-              <Text style={styles.heroHint}>
-                {expandTitle ? "Tap pour réduire" : "Tap pour lire la suite"}
-              </Text>
+              <Text style={styles.heroHint}>{expandTitle ? "Tap pour réduire" : "Tap pour lire la suite"}</Text>
             </Pressable>
 
             <View style={styles.heroMetaRow}>
               {numeroForRoutes ? <Chip tone="accent" label={`Scrutin ${numeroForRoutes}`} /> : null}
               <Chip label={`Législature ${CURRENT_LEGISLATURE}`} />
-              {(scrutin as any).article_ref ? (
-                <Chip label={`Art. ${(scrutin as any).article_ref}`} />
-              ) : null}
+              {(scrutin as any).article_ref ? <Chip label={`Art. ${(scrutin as any).article_ref}`} /> : null}
               {major ? <Chip label={major} /> : null}
             </View>
 
             <View style={styles.heroNarrative}>
               <Text style={styles.narrativeText}>
-                <Text style={styles.narrativeStrong}>{resultLabel}</Text>{" "}
-                · Pour <Text style={styles.narrativeStrong}>{pourPct}%</Text> · Contre{" "}
+                <Text style={styles.narrativeStrong}>{resultLabel}</Text> · Pour{" "}
+                <Text style={styles.narrativeStrong}>{pourPct}%</Text> · Contre{" "}
                 <Text style={styles.narrativeStrong}>{contrePct}%</Text>
                 {abstPct ? (
                   <>
@@ -974,16 +927,14 @@ export default function ScrutinDetailScreen() {
                   </>
                 ) : null}
               </Text>
-              <Text style={styles.narrativeHint}>
-                Appuie pour voir qui a voté quoi, groupe par groupe.
-              </Text>
+              <Text style={styles.narrativeHint}>Appuie pour voir qui a voté quoi, groupe par groupe.</Text>
             </View>
 
             <Pressable
               style={({ pressed }) => [styles.primaryCta, pressed && { opacity: 0.92 }]}
               onPress={() => {
                 if (!numeroForRoutes) return;
-                router.push(`/scrutins/${numeroForRoutes}/groupes`);
+                router.push(`/scrutins/${numeroForRoutes}/groupes` as any);
               }}
             >
               <Text style={styles.primaryCtaText}>
@@ -1023,7 +974,7 @@ export default function ScrutinDetailScreen() {
 
               <Pressable
                 style={({ pressed }) => [styles.loiButton, pressed && { opacity: 0.92 }]}
-                onPress={() => router.push(routeFromItemId(loi.loi_id))}
+                onPress={() => router.push(routeFromItemId(loi.loi_id) as any)}
               >
                 <Text style={styles.loiButtonText}>Ouvrir la fiche loi →</Text>
               </Pressable>
@@ -1046,24 +997,9 @@ export default function ScrutinDetailScreen() {
           </Text>
 
           <View style={styles.voteBar}>
-            <View
-              style={[
-                styles.barSeg,
-                { flex: Math.max(nbPour, 1), backgroundColor: SOFT_GREEN },
-              ]}
-            />
-            <View
-              style={[
-                styles.barSeg,
-                { flex: Math.max(nbContre, 1), backgroundColor: SOFT_RED },
-              ]}
-            />
-            <View
-              style={[
-                styles.barSeg,
-                { flex: Math.max(nbAbst, 1), backgroundColor: SOFT_YELLOW },
-              ]}
-            />
+            <View style={[styles.barSeg, { flex: Math.max(nbPour, 1), backgroundColor: SOFT_GREEN }]} />
+            <View style={[styles.barSeg, { flex: Math.max(nbContre, 1), backgroundColor: SOFT_RED }]} />
+            <View style={[styles.barSeg, { flex: Math.max(nbAbst, 1), backgroundColor: SOFT_YELLOW }]} />
           </View>
 
           <View style={{ marginTop: 12, alignItems: "center" }}>
@@ -1089,14 +1025,13 @@ export default function ScrutinDetailScreen() {
 
             {timelineToShow.map((item: TimelineItem) => {
               const isCurrent =
-                numeroForRoutes &&
-                String(item.numero_scrutin) === String(numeroForRoutes);
+                numeroForRoutes && String(item.numero_scrutin) === String(numeroForRoutes);
 
               return (
                 <Pressable
                   key={item.numero_scrutin}
                   disabled={!!isCurrent}
-                  onPress={() => router.push(`/scrutins/${item.numero_scrutin}`)}
+                  onPress={() => router.push(`/scrutins/${item.numero_scrutin}` as any)}
                   style={({ pressed }) => [
                     styles.timelineItem,
                     isCurrent ? styles.timelineItemActive : null,
@@ -1104,23 +1039,13 @@ export default function ScrutinDetailScreen() {
                   ]}
                 >
                   <View style={styles.timelineBulletColumn}>
-                    <View
-                      style={[
-                        styles.timelineBullet,
-                        isCurrent && styles.timelineBulletActive,
-                      ]}
-                    />
+                    <View style={[styles.timelineBullet, isCurrent && styles.timelineBulletActive]} />
                     <View style={styles.timelineLine} />
                   </View>
 
                   <View style={styles.timelineContent}>
                     <View style={styles.timelineHeaderRow}>
-                      <Text
-                        style={[
-                          styles.timelineNumero,
-                          isCurrent && styles.timelineNumeroActive,
-                        ]}
-                      >
+                      <Text style={[styles.timelineNumero, isCurrent && styles.timelineNumeroActive]}>
                         Scrutin n°{item.numero_scrutin}
                       </Text>
                       {item.date_scrutin && (
@@ -1131,10 +1056,7 @@ export default function ScrutinDetailScreen() {
                     </View>
 
                     <Text
-                      style={[
-                        styles.timelineTitre,
-                        isCurrent && styles.timelineTitreActive,
-                      ]}
+                      style={[styles.timelineTitre, isCurrent && styles.timelineTitreActive]}
                       numberOfLines={2}
                     >
                       {item.titre || item.objet || "Scrutin parlementaire"}
@@ -1171,9 +1093,7 @@ export default function ScrutinDetailScreen() {
           </View>
 
           {!showGroupSummary && (
-            <Text style={styles.grey}>
-              Aperçu optionnel (tu as déjà le “détail par groupe” au-dessus).
-            </Text>
+            <Text style={styles.grey}>Aperçu optionnel (tu as déjà le “détail par groupe” au-dessus).</Text>
           )}
 
           {showGroupSummary && groupedVotes.length === 0 && (
@@ -1183,17 +1103,17 @@ export default function ScrutinDetailScreen() {
           {showGroupSummary && groupedVotes.length > 0 && (
             <>
               <View style={{ marginTop: 6 }}>
-  {groupsToShow.map((g) => (
-    <GroupRow
-      key={g.groupe}
-      groupe={g.groupe}
-      pour={g.pour.length}
-      contre={g.contre.length}
-      abst={g.abst.length}
-      nv={g.nv.length}
-    />
-  ))}
-</View>
+                {groupsToShow.map((g) => (
+                  <GroupRow
+                    key={g.groupe}
+                    groupe={g.groupe}
+                    pour={g.pour.length}
+                    contre={g.contre.length}
+                    abst={g.abst.length}
+                    nv={g.nv.length}
+                  />
+                ))}
+              </View>
 
               {groupedVotes.length > 6 && (
                 <Pressable
@@ -1205,7 +1125,6 @@ export default function ScrutinDetailScreen() {
                   </Text>
                 </Pressable>
               )}
-
             </>
           )}
         </View>
@@ -1223,9 +1142,7 @@ export default function ScrutinDetailScreen() {
           </View>
 
           {!showVotes && (
-            <Text style={styles.grey}>
-              Replié pour éviter une liste trop longue. Appuie sur “Afficher”.
-            </Text>
+            <Text style={styles.grey}>Replié pour éviter une liste trop longue. Appuie sur “Afficher”.</Text>
           )}
 
           {showVotes && groupedVotes.length === 0 && (
@@ -1249,7 +1166,7 @@ export default function ScrutinDetailScreen() {
                       <VoteRow
                         key={key2}
                         vote={v}
-                        onPress={depId ? () => router.push(`/deputes/${depId}`) : undefined}
+                        onPress={depId ? () => router.push(`/deputes/${depId}` as any) : undefined}
                       />
                     );
                   })}
@@ -1616,50 +1533,6 @@ const styles = StyleSheet.create({
   },
   groupTitle: { color: TEXT, fontWeight: "900", marginBottom: 6 },
 
-  /* Mini cards */
-  miniGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 12,
-  },
-  miniCard: {
-    width: "47%",
-    backgroundColor: "rgba(255,255,255,0.045)",
-    padding: 12,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-    marginBottom: 10,
-  },
-  miniGroupTitle: {
-    fontSize: 13,
-    fontWeight: "900",
-    color: TEXT,
-    marginBottom: 8,
-  },
-  miniCountsRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  miniDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 3,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
-  },
-  miniCountsText: {
-    color: SUBTEXT,
-    fontWeight: "900",
-    fontSize: 12,
-    marginRight: 6,
-  },
-  miniTrend: {
-    marginTop: 8,
-    fontSize: 12,
-    fontWeight: "900",
-    color: TEXT,
-    opacity: 0.92,
-  },
-
   /* Vote row */
   voteRow: {
     flexDirection: "row",
@@ -1708,48 +1581,44 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.10)",
   },
   togglePillText: { color: TEXT, fontWeight: "900", fontSize: 12 },
+
+  /* ✅ GroupRow (fix: virgules + styles bien déclarés) */
   groupRow: {
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-  borderRadius: 14,
-  backgroundColor: "rgba(255,255,255,0.04)",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.08)",
-  marginTop: 10,
-},
-
-groupRowTop: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 10,
-},
-
-groupRowTitle: {
-  flex: 1,
-  minWidth: 0,
-  color: TEXT,
-  fontSize: 13,
-  fontWeight: "900",
-},
-
-groupRowNums: {
-  color: SUBTEXT,
-  fontSize: 12,
-  fontWeight: "800",
-},
-
-groupRowBar: {
-  flexDirection: "row",
-  height: 8,
-  borderRadius: 999,
-  overflow: "hidden",
-  marginTop: 8,
-  backgroundColor: SOFT_TRACK,
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.06)",
-},
-
-groupRowSeg: { height: "100%" },
-
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    marginTop: 10,
+  },
+  groupRowTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  groupRowTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: TEXT,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  groupRowNums: {
+    color: SUBTEXT,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  groupRowBar: {
+    flexDirection: "row",
+    height: 8,
+    borderRadius: 999,
+    overflow: "hidden",
+    marginTop: 8,
+    backgroundColor: SOFT_TRACK,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  groupRowSeg: { height: "100%" },
 });

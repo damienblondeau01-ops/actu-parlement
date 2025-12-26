@@ -2,6 +2,7 @@
 import React, { useMemo } from "react";
 import { View, Text, Pressable } from "react-native";
 import * as Haptics from "expo-haptics";
+import { routeFromItemId } from "@/lib/routes";
 
 type VoteKey = "pour" | "contre" | "abstention" | "nv";
 
@@ -52,14 +53,14 @@ export default function ActivityDpp({
     <View style={styles.dppCard}>
       {/* ✅ HEADER VERTICAL (zéro troncature) */}
       <View
-  style={[
-    styles.dppHeader,
-    { flexDirection: "column", alignItems: "flex-start", gap: 4 },
-  ]}
->
-  <Text style={styles.dppTitle}>Lecture politique (D++)</Text>
-  <Text style={styles.dppHint}>Basé sur les 6 derniers votes</Text>
-</View>
+        style={[
+          styles.dppHeader,
+          { flexDirection: "column", alignItems: "flex-start", gap: 4 },
+        ]}
+      >
+        <Text style={styles.dppTitle}>Lecture politique (D++)</Text>
+        <Text style={styles.dppHint}>Basé sur les 6 derniers votes</Text>
+      </View>
 
       <Text style={styles.dppSectionTitle}>Votes marqueurs</Text>
 
@@ -82,7 +83,9 @@ export default function ActivityDpp({
                   try {
                     Haptics.selectionAsync();
                   } catch {}
-                  router.push(`/scrutins/${v.numero_scrutin}`);
+
+                  const href = routeFromItemId(String(v.numero_scrutin ?? "").trim());
+                  if (href) router.push(href as any);
                 }}
               >
                 <View style={styles.dppItemTop}>
