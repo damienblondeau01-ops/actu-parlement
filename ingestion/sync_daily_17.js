@@ -70,7 +70,7 @@ async function main() {
   run("node votes/fetch_votes_from_opendata.js 17");
 
   // 2) Import scrutins depuis le ZIP local
-  run("node scrutins/fetch_scrutins_from_local_zip.js");
+  run("node scrutins/fetch_scrutins_from_local_zip.cjs");
 
   // 3) MV légère via RPC (utile pour l’accueil)
   await rpcOrThrow("refresh_mv_scrutins_recents");
