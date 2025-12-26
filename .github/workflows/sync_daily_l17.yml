@@ -1,7 +1,7 @@
 name: Sync Daily L17 (Supabase)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   schedule:
     - cron: "30 3 * * *"
 
@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -33,19 +33,29 @@ jobs:
       - name: Debug versions
         run: node -v && npm -v
 
-      # Root deps: on skippe les scripts pour éviter "expo-router install"
-      - name: Install dependencies (root)
+      # Root deps : on skippe les scripts pour éviter "expo-router install"
+      - name: Install deps (root, ignore scripts)
         run: npm ci --ignore-scripts
 
-      # Ingestion deps
-      - name: Install dependencies (ingestion)
+      # Dépendances d'ingestion
+      - name: Install deps (ingestion)
         working-directory: ingestion
         run: npm ci
 
-      - name: Run daily sync L17
+      # ✅ NEW : dossiers
+      - name: Sync dossiers legislatifs (latest)
+        env:
+          CI: "true"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run dossiers:sync
+
+      # ✅ Ton pipeline existant
+      - name: Run sync daily L17
         env:
           CI: "true"
           SKIP_PG_REFRESH: "1"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run sync:daily:l17
+
