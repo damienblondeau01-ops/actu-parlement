@@ -42,22 +42,6 @@ jobs:
         working-directory: ingestion
         run: npm ci
 
-      - name: Check required secrets
-        run: |
-          if [ -z "${{ secrets.DOSSIERS_ZIP_URL }}" ]; then
-            echo "❌ Missing secret: DOSSIERS_ZIP_URL"
-            exit 1
-          fi
-          if [ -z "${{ secrets.SUPABASE_URL }}" ]; then
-            echo "❌ Missing secret: SUPABASE_URL"
-            exit 1
-          fi
-          if [ -z "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" ]; then
-            echo "❌ Missing secret: SUPABASE_SERVICE_ROLE_KEY"
-            exit 1
-          fi
-          echo "✅ Secrets OK"
-
       # ✅ 1) Download ZIP dossiers (L17)
       - name: Download dossiers ZIP
         env:
@@ -65,7 +49,7 @@ jobs:
         run: npm run dossiers:download
 
       # ✅ 2) Import dossiers -> table lois (idempotent)
-      - name: Import dossiers into Supabase
+      - name: Import dossiers into Supabase (L17 only)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -80,5 +64,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run sync:daily:l17
+
 
 
