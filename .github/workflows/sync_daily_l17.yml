@@ -50,6 +50,14 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run dossiers:sync
 
+      - name: Sync dossiers (download + import)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DOSSIERS_ZIP_URL: ${{ secrets.DOSSIERS_ZIP_URL }}
+        run: npm run dossiers:sync
+
+
       # ✅ Ton pipeline existant
       - name: Run sync daily L17
         env:
