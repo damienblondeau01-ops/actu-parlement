@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { supabase } from "./supabase_ingest_client.js";
+import { supabase } from "./supabase_ingest_client.cjs";
 
 // Petit helper pour __dirname en ES modules
 const __filename = fileURLToPath(import.meta.url);
