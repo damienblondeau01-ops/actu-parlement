@@ -1021,7 +1021,7 @@ export default function ActuGroupScreen() {
     const a = accentForTone(t);
     const ic = pickIconFromEntity(item.entity);
 
-    const canOpen = !!item.href;
+    const canOpen = !!item.href && (item.entity === "scrutin" || item.entity === "loi");
     const badge = labelForEntity(item.entity);
 
     const prev = index > 0 ? visibleItems[index - 1] : null;
@@ -1130,10 +1130,14 @@ export default function ActuGroupScreen() {
         </Pressable>
 
         <View style={styles.topRight}>
-          <Pressable onPress={onRefresh} style={styles.refreshBtn}>
-            <Ionicons name="refresh" size={16} color={colors.text} />
-          </Pressable>
-        </View>
+  <Pressable onPress={() => router.push("/_debug" as any)} style={styles.refreshBtn}>
+    <Ionicons name="bug-outline" size={16} color={colors.text} />
+  </Pressable>
+
+  <Pressable onPress={onRefresh} style={styles.refreshBtn}>
+    <Ionicons name="refresh" size={16} color={colors.text} />
+  </Pressable>
+</View>
       </View>
 
       {/* ✅ Skeleton state */}

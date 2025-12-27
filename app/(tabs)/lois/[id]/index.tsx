@@ -203,7 +203,8 @@ function mapDtoToLoiScreenModel(dto: LoiDetailDTO): LoiScreenModel {
 
 export default function LoiDetailV1Screen() {
   const router = useRouter();
-  const params = useLocalSearchParams<RouteParams>();
+  const params = useLocalSearchParams();
+  console.log("[LOI ROUTE PARAMS]", JSON.stringify(params));
 
   const id = useMemo(() => safeId(params), [params]);
   const fromKey = useMemo(() => String((params as any)?.fromKey ?? "").trim() || null, [params]);
