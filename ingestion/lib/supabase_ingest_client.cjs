@@ -1,4 +1,4 @@
-// ingestion/supabase_ingest_client.js
+// ingestion/supabase_ingest_client.cjs
 const dotenv = require("dotenv");
 const { createClient } = require("@supabase/supabase-js");
 

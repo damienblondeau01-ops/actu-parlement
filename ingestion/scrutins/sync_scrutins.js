@@ -1,6 +1,6 @@
 // ingestion/sync_scrutins.js
 require("dotenv").config();
-const { supabaseAdmin } = require("./supabaseAdminClient");
+const { supabaseAdmin } = require("./supabaseAdminClient.cjs");
 
 /**
  * À ADAPTER :

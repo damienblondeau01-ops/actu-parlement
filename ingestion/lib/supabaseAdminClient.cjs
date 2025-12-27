@@ -1,4 +1,4 @@
-// ingestion/supabaseAdminClient.js
+// ingestion/supabaseAdminClient.cjs
 require("dotenv").config({ path: __dirname + "/.env" });
 const { createClient } = require("@supabase/supabase-js");
 
