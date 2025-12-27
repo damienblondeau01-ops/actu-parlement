@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -33,39 +33,38 @@ jobs:
       - name: Debug versions
         run: node -v && npm -v
 
-      # Root deps: on skippe les scripts pour éviter "expo-router install"
+      # Root deps : on skippe les scripts pour éviter "expo-router install"
       - name: Install dependencies (root)
         run: npm ci --ignore-scripts
 
-      # Ingestion deps
+      # Dépendances d'ingestion
       - name: Install dependencies (ingestion)
         working-directory: ingestion
         run: npm ci
 
-      # ✅ 1) Download ZIP dossiers (L17)
+      # ✅ 1) Télécharger les dossiers ZIP (L17)
       - name: Download dossiers ZIP
         env:
-          DOSSIERS_ZIP_URL: ${{ secrets.DOSSIERS_ZIP_URL }}
+          URL_ZIP_DOSSIERS: ${{ secrets.DOSSIERS_ZIP_URL }}
         run: npm run dossiers:download
 
-      # ✅ 2) Import dossiers -> table lois (idempotent)
-      - name: Import dossiers into Supabase (L17 only)
+      # ✅ 2) Importer des dossiers -> table lois (idempotent)
+      - name: Sync dossiers into Supabase (L17 only)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          ONLY_LEG: "17"
+          LEG_ONLY: "17"
         run: npm run dossiers:sync
 
-       - name: Debug which importer is referenced
+      - name: Debug referenced importer
         run: |
           echo "HEAD = $(git rev-parse HEAD)"
           echo "--- grep sync_daily_17.js ---"
           grep -n "fetch_scrutins_from_local_zip" ingestion/sync_daily_17.js || true
-          echo "--- ls scrutins ---"
-          ls -la ingestion/scrutins | sed -n '1,200p'
+          echo "--- ls ingestion/examens ---"
+          ls -la ingestion/examens | sed -n '1,200p'
 
-
-      # ✅ 3) Ton pipeline existant
+      # ✅ 3) Pipeline existant
       - name: Run daily sync L17
         env:
           CI: "true"
@@ -73,6 +72,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run sync:daily:l17
-
 
 
