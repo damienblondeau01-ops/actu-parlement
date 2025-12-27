@@ -45,7 +45,7 @@ jobs:
       # ✅ 1) Télécharger les dossiers ZIP (L17)
       - name: Download dossiers ZIP
         env:
-          URL_ZIP_DOSSIERS: ${{ secrets.DOSSIERS_ZIP_URL }}
+          DOSSIERS_ZIP_URL: ${{ secrets.DOSSIERS_ZIP_URL }}
         run: npm run dossiers:download
 
       # ✅ 2) Importer des dossiers -> table lois (idempotent)
