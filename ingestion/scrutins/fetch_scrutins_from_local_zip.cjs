@@ -199,7 +199,7 @@ async function main() {
         type_texte: type_texte || "",
       });
 
-      const group_key = computeLoiGroupKey.cjs(titre ?? "", objet ?? "", type_texte ?? "");
+      const group_key = computeLoiGroupKey(titre ?? "", objet ?? "", type_texte ?? "");
       const loi_id_value = group_key ?? id_an;
 
       const date_scrutin = s.dateScrutin ?? s.date ?? null;
