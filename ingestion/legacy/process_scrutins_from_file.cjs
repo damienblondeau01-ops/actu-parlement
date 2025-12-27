@@ -7,7 +7,7 @@ const { kind, article_ref } = inferScrutinKind({
 });
 
 // Clé logique regroupant tous les scrutins d’une même loi
-const group_key = computeLoiGroupKey(
+const group_key = computeLoiGroupKey.cjs(
   titre ?? "",
   objet ?? "",
   type_texte ?? ""

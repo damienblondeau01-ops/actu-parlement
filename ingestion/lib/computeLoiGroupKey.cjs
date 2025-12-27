@@ -1,4 +1,4 @@
-ï»¿function normalizeBase(str) {
+function normalizeBase(str) {
   return str
     .toLowerCase()
     .normalize("NFD")
@@ -7,14 +7,14 @@
     .trim();
 }
 
-function computeLoiGroupKey(titre, objet, type_texte) {
+function computeLoiGroupKey.cjs(titre, objet, type_texte) {
   const srcRaw = titre || objet || "";
   const srcNorm = normalizeBase(srcRaw);
   if (!srcNorm) return null;
 
   let base = srcNorm
-    .replace(/l'?amendement nÂ°?\s*\d+[^\w]+(de|de la|de l'|du|apres|aprÃ¨s|sur)\s+/, "")
-    .replace(/^amendement nÂ°?\s*\d+\s*:/, "");
+    .replace(/l'?amendement n°?\s*\d+[^\w]+(de|de la|de l'|du|apres|après|sur)\s+/, "")
+    .replace(/^amendement n°?\s*\d+\s*:/, "");
 
   const lawPatterns = [
     /(proposition de loi[^:;.,]*)/,
@@ -48,4 +48,4 @@ function computeLoiGroupKey(titre, objet, type_texte) {
   return slug || null;
 }
 
-module.exports = { computeLoiGroupKey };
+module.exports = { computeLoiGroupKey.cjs };
