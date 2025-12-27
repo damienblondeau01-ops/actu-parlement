@@ -1,4 +1,4 @@
-// ingestion/inferScrutinKind.js
+// ingestion/inferScrutinKind.cjs
 // -------------------------------------------------------------
 // Helpers pour classifier les scrutins en :
 // - "article"
