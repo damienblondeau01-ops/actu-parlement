@@ -1,4 +1,4 @@
-﻿// ingestion/scrutins/fetch_scrutins_from_local_zip.cjs
+// ingestion/scrutins/fetch_scrutins_from_local_zip.cjs
 const dotenv = require("dotenv");
 const fs = require("fs");
 const path = require("path");
@@ -6,10 +6,10 @@ const AdmZip = require("adm-zip");
 const { createClient } = require("@supabase/supabase-js");
 
 // Helpers dans ingestion/lib
-const { inferScrutinKind } = require("../lib/inferScrutinKind");
+const { inferScrutinKind } = require("../lib/inferScrutinKind.cjs");
 const { computeLoiGroupKey } = require("../lib/computeLoiGroupKey");
 
-// ✅ charge ingestion/.env (et pas un .env au hasard du cwd)
+// ? charge ingestion/.env (et pas un .env au hasard du cwd)
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 
 // Petit helper comme dans fetch_votes_from_opendata
@@ -33,7 +33,7 @@ const SUPABASE_KEY =
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error("❌ Variables supabase manquantes (SUPABASE_URL / SERVICE_ROLE)");
+  console.error("? Variables supabase manquantes (SUPABASE_URL / SERVICE_ROLE)");
   process.exit(1);
 }
 
@@ -41,9 +41,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
 });
 
-// ✅ raw ultra-allégé (sinon timeout PostgREST)
+// ? raw ultra-all�g� (sinon timeout PostgREST)
 function makeRawLight(s) {
-  // On garde le minimum utile pour debug, sans les énormes blocs ventilationVotes etc.
+  // On garde le minimum utile pour debug, sans les �normes blocs ventilationVotes etc.
   return {
     uid: s?.uid ?? null,
     numero: s?.numero ?? null,
@@ -62,23 +62,23 @@ function makeRawLight(s) {
 
 async function purgeIfAsked() {
   if (!DO_PURGE) {
-    console.log("✅ Mode daily : pas de purge, import idempotent (upsert)");
+    console.log("? Mode daily : pas de purge, import idempotent (upsert)");
     return;
   }
 
-  console.log("🧹 PURGE activée (scrutins_import + scrutins_raw)");
+  console.log("?? PURGE activ�e (scrutins_import + scrutins_raw)");
 
   const { error: del1 } = await supabase
     .from("scrutins_import")
     .delete()
     .neq("id_an", "");
-  if (del1) console.error("❌ Erreur purge scrutins_import :", del1.message);
+  if (del1) console.error("? Erreur purge scrutins_import :", del1.message);
 
   const { error: del2 } = await supabase
     .from("scrutins_raw")
     .delete()
     .neq("id_an", "");
-  if (del2) console.error("❌ Erreur purge scrutins_raw :", del2.message);
+  if (del2) console.error("? Erreur purge scrutins_raw :", del2.message);
 }
 
 async function upsertBatched(table, rows, { batchSize, label }) {
@@ -94,7 +94,7 @@ async function upsertBatched(table, rows, { batchSize, label }) {
 
     if (error) {
       ko += batch.length;
-      console.error(`❌ Erreur upsert ${label} (batch ${i}-${i + batch.length - 1}) :`, error.message);
+      console.error(`? Erreur upsert ${label} (batch ${i}-${i + batch.length - 1}) :`, error.message);
       continue;
     }
 
@@ -102,7 +102,7 @@ async function upsertBatched(table, rows, { batchSize, label }) {
 
     // petit log de progression
     if ((i / batchSize) % 10 === 0) {
-      console.log(`   ↳ ${label} progress: ${Math.min(i + batch.length, rows.length)}/${rows.length}`);
+      console.log(`   ? ${label} progress: ${Math.min(i + batch.length, rows.length)}/${rows.length}`);
     }
   }
 
@@ -110,23 +110,23 @@ async function upsertBatched(table, rows, { batchSize, label }) {
 }
 
 async function main() {
-  console.log("🚀 fetch_scrutins_from_local_zip démarré");
-  console.log("   Législature ciblée :", LEGISLATURE);
+  console.log("?? fetch_scrutins_from_local_zip d�marr�");
+  console.log("   L�gislature cibl�e :", LEGISLATURE);
   console.log("   ZIP :", ZIP_PATH);
 
   if (!fs.existsSync(ZIP_PATH)) {
-    console.error("❌ Fichier ZIP introuvable :", ZIP_PATH);
+    console.error("? Fichier ZIP introuvable :", ZIP_PATH);
     process.exit(1);
   }
 
   const stats = fs.statSync(ZIP_PATH);
-  console.log("💾 ZIP local trouvé, taille =", stats.size, "octets");
+  console.log("?? ZIP local trouv�, taille =", stats.size, "octets");
 
   await purgeIfAsked();
 
   const zip = new AdmZip(ZIP_PATH);
   const entries = zip.getEntries();
-  console.log("📦 Nombre de fichiers dans le ZIP :", entries.length);
+  console.log("?? Nombre de fichiers dans le ZIP :", entries.length);
 
   const allScrutins = [];
 
@@ -137,7 +137,7 @@ async function main() {
     try {
       parsed = JSON.parse(entry.getData().toString("utf8"));
     } catch (e) {
-      console.warn("⚠️ JSON invalide dans", entry.entryName, ":", e.message);
+      console.warn("?? JSON invalide dans", entry.entryName, ":", e.message);
       continue;
     }
 
@@ -155,18 +155,18 @@ async function main() {
     }
   }
 
-  console.log("📊 Nombre total de scrutins extraits (brut) :", allScrutins.length);
+  console.log("?? Nombre total de scrutins extraits (brut) :", allScrutins.length);
 
-  // ✅ Filtrage L17
+  // ? Filtrage L17
   const scrutins17 = allScrutins.filter((s) => {
     const id_an = s?.uid || s?.code || s?.idScrutin || s?.scrutinId || s?.id || "";
     return typeof id_an === "string" && id_an.includes(`L${LEGISLATURE}`);
   });
 
-  console.log("🎯 Scrutins gardés après filtre L17 :", scrutins17.length);
+  console.log("?? Scrutins gard�s apr�s filtre L17 :", scrutins17.length);
 
   if (scrutins17.length === 0) {
-    console.log("⚠️ Aucun scrutin L17 trouvé (ZIP inattendu ?).");
+    console.log("?? Aucun scrutin L17 trouv� (ZIP inattendu ?).");
     return;
   }
 
@@ -225,7 +225,7 @@ async function main() {
         group_key,
       });
 
-      // ✅ raw allégé (sinon timeout)
+      // ? raw all�g� (sinon timeout)
       rowsRaw.push({
         id_an,
         date_scrutin,
@@ -242,16 +242,16 @@ async function main() {
       });
     } catch (e) {
       koMap++;
-      console.error("❌ Exception mapping scrutin :", e?.message ?? e);
+      console.error("? Exception mapping scrutin :", e?.message ?? e);
     }
   }
 
-  console.log("💾 Upsert scrutins_import + scrutins_raw (batch)…");
+  console.log("?? Upsert scrutins_import + scrutins_raw (batch)�");
   console.log(`   rowsImport=${rowsImport.length} | rowsRaw=${rowsRaw.length} | mapErrors=${koMap}`);
 
-  // ✅ scrutins_import peut être gros
+  // ? scrutins_import peut �tre gros
   const IMPORT_BATCH = 500;
-  // ✅ scrutins_raw DOIT être plus petit (sinon timeout)
+  // ? scrutins_raw DOIT �tre plus petit (sinon timeout)
   const RAW_BATCH = 50;
 
   const imp = await upsertBatched("scrutins_import", rowsImport, {
@@ -264,17 +264,17 @@ async function main() {
     label: "scrutins_raw",
   });
 
-  console.log("\n📌 Résumé upserts :");
+  console.log("\n?? R�sum� upserts :");
   console.log(`   scrutins_import : ${imp.ok} OK, ${imp.ko} KO`);
   console.log(`   scrutins_raw    : ${raw.ok} OK, ${raw.ko} KO`);
   console.log(`   mapping errors  : ${koMap}`);
 
   const totalKo = imp.ko + raw.ko + koMap;
-  console.log(`\n✅ Import terminé : ${imp.ok} lignes OK (scrutins_import), ${totalKo} problèmes (voir logs).`);
-  console.log("ℹ️ Prochaine étape : sync scrutins_data / vues (si ton pipeline le fait déjà).");
+  console.log(`\n? Import termin� : ${imp.ok} lignes OK (scrutins_import), ${totalKo} probl�mes (voir logs).`);
+  console.log("?? Prochaine �tape : sync scrutins_data / vues (si ton pipeline le fait d�j�).");
 }
 
 main().catch((e) => {
-  console.error("❌ Erreur fatale :", e);
+  console.error("? Erreur fatale :", e);
   process.exit(1);
 });
