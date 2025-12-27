@@ -7,7 +7,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 // Helpers dans ingestion/lib
 const { inferScrutinKind } = require("../lib/inferScrutinKind.cjs");
-const { computeLoiGroupKey } = require("../lib/computeLoiGroupKey");
+const { computeLoiGroupKey.cjs } = require("../lib/computeLoiGroupKey.cjs");
 
 // ? charge ingestion/.env (et pas un .env au hasard du cwd)
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
@@ -199,7 +199,7 @@ async function main() {
         type_texte: type_texte || "",
       });
 
-      const group_key = computeLoiGroupKey(titre ?? "", objet ?? "", type_texte ?? "");
+      const group_key = computeLoiGroupKey.cjs(titre ?? "", objet ?? "", type_texte ?? "");
       const loi_id_value = group_key ?? id_an;
 
       const date_scrutin = s.dateScrutin ?? s.date ?? null;
