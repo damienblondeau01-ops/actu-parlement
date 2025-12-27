@@ -1,18 +1,17 @@
 // app/actu/group/[key].tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Animated,
   Easing,
   FlatList,
+  LayoutAnimation,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
   Text,
-  View,
-  LayoutAnimation,
-  Platform,
   UIManager,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -22,7 +21,7 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { theme } from "../../../lib/theme";
 import { fetchActuItems, type ActuItem as ActuItemDB } from "@/lib/queries/actu";
 import { groupActuItems, type GroupedActuRow } from "@/lib/actu/grouping";
-import { routeFromActuItem } from "@/lib/routes";
+import { routeFromActuItem } from "../../../lib/routes";
 
 const colors = theme.colors;
 
@@ -658,7 +657,14 @@ function ProofsAccordion({
  *  ✅ Mini Skeleton (simple + propre)
  *  ========================= */
 function SkeletonBox({ w, h, r = 12, style }: { w?: number | string; h: number; r?: number; style?: any }) {
-  return <View style={[{ width: w ?? "100%", height: h, borderRadius: r, backgroundColor: "rgba(255,255,255,0.07)" }, style]} />;
+  return (
+    <View
+      style={[
+        { width: w ?? "100%", height: h, borderRadius: r, backgroundColor: "rgba(255,255,255,0.07)" },
+        style,
+      ]}
+    />
+  );
 }
 
 function usePulse() {
@@ -841,6 +847,10 @@ export default function ActuGroupScreen() {
     });
   }, [groupKey, group, loading]);
 
+  // ✅ Helpers dérivés
+  const groupTLDR = useMemo(() => buildGroupTLDR(group), [group]);
+  const loiIdRoutable = useMemo(() => findRoutableLoiId(group), [group]);
+
   useEffect(() => {
     if (!DEV) return;
     if (loading) return;
@@ -881,9 +891,6 @@ export default function ActuGroupScreen() {
 
     return { title, date, total, amend, scr, art, subtitle };
   }, [group]);
-
-  const groupTLDR = useMemo(() => buildGroupTLDR(group), [group]);
-  const loiIdRoutable = useMemo(() => findRoutableLoiId(group), [group]);
 
   const loiHref = useMemo(() => {
     if (!loiIdRoutable) return null;
@@ -1035,12 +1042,12 @@ export default function ActuGroupScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.card,
-            pressed && { opacity: 0.96 },
-            !canOpen && { opacity: 0.92 },
+            pressed && canOpen && { opacity: 0.96 },
+            !canOpen && { opacity: 0.6 }, // ✅ FIX #2
             item.isPinned && styles.pinnedCard,
           ]}
-          onPress={() => openHref(item.href || null)}
-          android_ripple={{ color: "rgba(255,255,255,0.06)" }}
+          onPress={canOpen ? () => openHref(item.href) : undefined} // ✅ FIX #2
+          android_ripple={canOpen ? { color: "rgba(255,255,255,0.06)" } : undefined} // ✅ FIX #2
         >
           <LinearGradient colors={g as any} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.cardBg} />
           <View style={[styles.accentBar, { backgroundColor: a }]} />
@@ -1079,7 +1086,7 @@ export default function ActuGroupScreen() {
 
           <View style={styles.bottomRow}>
             <Text style={styles.bottomHint} numberOfLines={1}>
-              Voir la preuve →
+              {canOpen ? "Voir la preuve →" : "Information"} {/* ✅ FIX #1 */}
             </Text>
             <View style={styles.ctaRight}>
               <Text style={styles.ctaText}>→</Text>
@@ -1265,7 +1272,10 @@ export default function ActuGroupScreen() {
               <View style={{ paddingHorizontal: 2, marginTop: 12 }}>
                 <Text style={styles.sectionTitle}>ÉTAPES</Text>
                 <Text style={styles.stepsHint}>
-                  {hasMore ? `Top ${STEP_LIMIT} affichées (les plus récentes).` : "Chaque étape est un fait vérifiable : vote, amendement, déclaration…"}
+                  {hasMore
+                    ? `Les ${STEP_LIMIT} étapes les plus récentes.`
+                    : "Chaque étape correspond à un fait parlementaire vérifiable."}{" "}
+                  {/* ✅ FIX #3 */}
                 </Text>
                 <View style={styles.sectionLine} />
               </View>

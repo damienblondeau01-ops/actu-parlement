@@ -1,4 +1,4 @@
-﻿// app/(tabs)/lois/[id]/v1.tsx
+// app/(tabs)/lois/[id]/v1.tsx
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -25,10 +25,10 @@ import {
   type LoiScreenModel,
 } from "../../../../components/loi/LoiBlocks";
 
-import { routeFromItemId } from "@/lib/routes";
+import { routeFromItemId } from "../../../../lib/routes";
 import { fetchLoiDetailV1 } from "@/lib/queries/loisDetailV1";
 
-// âœ… FIX TS2307 : on importe le type depuis le mÃªme fichier V1 (plus de contracts fantÃ´me)
+// ✅ FIX TS2307 : on importe le type depuis le même fichier V1 (plus de contracts fantôme)
 import type { LoiDetailDTO } from "@/lib/queries/loisDetailV1";
 
 const colors = theme.colors;
@@ -70,11 +70,11 @@ function FadeInUp({ children, delay = 0 }: { children: React.ReactNode; delay?: 
 }
 
 function fmtDateFR(d?: string | null) {
-  if (!d) return "â€”";
+  if (!d) return "—";
   try {
     return new Date(d).toLocaleDateString("fr-FR");
   } catch {
-    return "â€”";
+    return "—";
   }
 }
 
@@ -84,10 +84,10 @@ function userMessageFromError(err: unknown) {
   const code = String(e?.code ?? "");
 
   if (code === "57014" || msg.includes("statement timeout") || msg.includes("canceling statement")) {
-    return "Le chargement prend trop de temps pour lâ€™instant. RÃ©essayez dans un moment.";
+    return "Le chargement prend trop de temps pour l’instant. Réessayez dans un moment.";
   }
   if (msg.includes("network") || msg.includes("failed to fetch") || msg.includes("fetch")) {
-    return "Impossible de charger cette loi (problÃ¨me de connexion).";
+    return "Impossible de charger cette loi (problème de connexion).";
   }
   return "Impossible de charger cette loi actuellement.";
 }
@@ -104,19 +104,19 @@ function safeId(params: unknown): string {
 
 function statusLabelFromDto(dto: LoiDetailDTO): string {
   const state = dto.hero?.etat;
-  if (state === "PROMULGUEE") return "PromulguÃ©e";
-  if (state === "ADOPTEE") return "AdoptÃ©e";
-  if (state === "REJETEE") return "RejetÃ©e";
+  if (state === "PROMULGUEE") return "Promulguée";
+  if (state === "ADOPTEE") return "Adoptée";
+  if (state === "REJETEE") return "Rejetée";
   if (state === "EN_COURS") return "En cours";
   return "Dossier";
 }
 
-function majorityStanceFromVotes(pour: number, contre: number, abst: number): "POUR" | "CONTRE" | "DIVISÃ‰" {
+function majorityStanceFromVotes(pour: number, contre: number, abst: number): "POUR" | "CONTRE" | "DIVISÉ" {
   const max = Math.max(pour ?? 0, contre ?? 0, abst ?? 0);
-  if (max === 0) return "DIVISÃ‰";
+  if (max === 0) return "DIVISÉ";
   if ((pour ?? 0) === max) return "POUR";
   if ((contre ?? 0) === max) return "CONTRE";
-  return "DIVISÃ‰";
+  return "DIVISÉ";
 }
 
 function mapDtoToLoiScreenModel(dto: LoiDetailDTO): LoiScreenModel {
@@ -124,9 +124,9 @@ function mapDtoToLoiScreenModel(dto: LoiDetailDTO): LoiScreenModel {
   const subtitleParts: string[] = [];
 
   if (dto.hero?.legislature_context) subtitleParts.push(`L${dto.hero.legislature_context}`);
-  if (dto.timeline?.key_scrutin?.numero) subtitleParts.push(`Scrutin clÃ© : ${dto.timeline.key_scrutin.numero}`);
+  if (dto.timeline?.key_scrutin?.numero) subtitleParts.push(`Scrutin clé : ${dto.timeline.key_scrutin.numero}`);
 
-  const subtitle = subtitleParts.length ? subtitleParts.join(" â€¢ ") : "Comprendre lâ€™essentiel en quelques secondes";
+  const subtitle = subtitleParts.length ? subtitleParts.join(" • ") : "Comprendre l’essentiel en quelques secondes";
   const statusLabel = statusLabelFromDto(dto);
 
   const aiIntro =
@@ -137,25 +137,25 @@ function mapDtoToLoiScreenModel(dto: LoiDetailDTO): LoiScreenModel {
         }
       : dto.why_it_matters?.bullets?.length
       ? {
-          title: "Pourquoi Ã§a compte",
-          summary: dto.why_it_matters.bullets.slice(0, 3).map((b: string) => `â€¢ ${b}`).join("\n"),
+          title: "Pourquoi ça compte",
+          summary: dto.why_it_matters.bullets.slice(0, 3).map((b: string) => `• ${b}`).join("\n"),
         }
       : undefined;
 
   const tldr: string[] = [];
-  if (dto.timeline?.key_scrutin?.numero) tldr.push(`Scrutin de rÃ©fÃ©rence : ${dto.timeline.key_scrutin.numero}`);
+  if (dto.timeline?.key_scrutin?.numero) tldr.push(`Scrutin de référence : ${dto.timeline.key_scrutin.numero}`);
 
   const events = dto.timeline?.events ?? [];
   const firstEvent = events[events.length - 1];
   const lastEvent = events[0];
 
-  if (lastEvent?.date) tldr.push(`DerniÃ¨re Ã©tape : ${fmtDateFR(lastEvent.date)}`);
-  if (firstEvent?.date) tldr.push(`DÃ©but de lâ€™aperÃ§u : ${fmtDateFR(firstEvent.date)}`);
-  if (dto.sources?.dossier_an_url) tldr.push("Source : dossier AssemblÃ©e nationale");
+  if (lastEvent?.date) tldr.push(`Dernière étape : ${fmtDateFR(lastEvent.date)}`);
+  if (firstEvent?.date) tldr.push(`Début de l’aperçu : ${fmtDateFR(firstEvent.date)}`);
+  if (dto.sources?.dossier_an_url) tldr.push("Source : dossier Assemblée nationale");
 
   const impact: { label: string; value: string }[] = [];
-  if (events.length) impact.push({ label: "Ã‰tapes visibles", value: String(events.length) });
-  if (dto.scrutins?.items?.length) impact.push({ label: "Scrutins listÃ©s", value: String(dto.scrutins.items.length) });
+  if (events.length) impact.push({ label: "Étapes visibles", value: String(events.length) });
+  if (dto.scrutins?.items?.length) impact.push({ label: "Scrutins listés", value: String(dto.scrutins.items.length) });
 
   const totals = dto.votes_by_group?.totals;
   const vote = {
@@ -175,13 +175,13 @@ function mapDtoToLoiScreenModel(dto: LoiDetailDTO): LoiScreenModel {
       date: fmtDateFR(e.date),
       title:
         idx === 0
-          ? "Ã‰tape la plus rÃ©cente"
+          ? "Étape la plus récente"
           : e.title?.trim()
           ? e.title.trim()
           : e.type === "VOTE_AN"
-          ? "Vote Ã  lâ€™AssemblÃ©e nationale"
-          : "Ã‰tape",
-      description: (e.description ?? "").trim() || "DÃ©tail indisponible",
+          ? "Vote à l’Assemblée nationale"
+          : "Étape",
+      description: (e.description ?? "").trim() || "Détail indisponible",
       scrutinId: e.proof?.kind === "scrutin" ? String(e.proof.scrutin_numero ?? "") : null,
       kind: e.type ?? null,
     }));
@@ -191,8 +191,8 @@ function mapDtoToLoiScreenModel(dto: LoiDetailDTO): LoiScreenModel {
     subtitle,
     statusLabel,
     aiIntro,
-    tldr: tldr.length ? tldr : ["Aucun rÃ©sumÃ© disponible pour lâ€™instant."],
-    impact: impact.length ? impact : [{ label: "Ã‰tapes visibles", value: "â€”" }],
+    tldr: tldr.length ? tldr : ["Aucun résumé disponible pour l’instant."],
+    impact: impact.length ? impact : [{ label: "Étapes visibles", value: "—" }],
     vote,
     groups,
     timeline,
@@ -233,7 +233,7 @@ export default function LoiDetailV1Screen() {
       if (!d) {
         setDto(null);
         setModel(null);
-        setError("Cette loi nâ€™est pas disponible.");
+        setError("Cette loi n’est pas disponible.");
         return;
       }
       setDto(d);
@@ -254,7 +254,7 @@ export default function LoiDetailV1Screen() {
   }, [id, isScrutinId, runLoad]);
 
   <View style={{ padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,0,0,0.6)", backgroundColor: "rgba(255,0,0,0.12)", marginBottom: 10 }}>
-  <Text style={{ color: "#fff", fontWeight: "900" }}>âœ… Ã‰CRAN V1 (v1.tsx)</Text>
+  <Text style={{ color: "#fff", fontWeight: "900" }}>✅ ÉCRAN V1 (v1.tsx)</Text>
   <Text style={{ color: "rgba(255,255,255,0.8)", marginTop: 4 }}>id = {id}</Text>
 </View>
 
@@ -270,19 +270,16 @@ export default function LoiDetailV1Screen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
-<View style={{ backgroundColor: "red", padding: 10, borderRadius: 12, marginBottom: 12 }}>
-  <Text style={{ color: "white", fontWeight: "900" }}>DEBUG — LOI [id]/index.tsx (LOADING)</Text>
-</View>
-          <Text style={styles.errorText}>Cet identifiant correspond Ã  un scrutin, pas Ã  une loi.</Text>
+          <Text style={styles.errorText}>Cet identifiant correspond à un scrutin, pas à une loi.</Text>
 
           <View style={{ height: 12 }} />
 
           <Pressable style={styles.actionBtn} onPress={() => router.replace(routeFromItemId(id) as any)}>
-            <Text style={styles.actionBtnText}>Ouvrir le scrutin â†’</Text>
+            <Text style={styles.actionBtnText}>Ouvrir le scrutin →</Text>
           </Pressable>
 
           <Pressable style={styles.linkBtn} onPress={() => router.back()}>
-            <Text style={styles.linkText}>â† Retour</Text>
+            <Text style={styles.linkText}>← Retour</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -293,11 +290,8 @@ export default function LoiDetailV1Screen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
-<View style={{ backgroundColor: "red", padding: 10, borderRadius: 12, marginBottom: 12 }}>
-  <Text style={{ color: "white", fontWeight: "900" }}>DEBUG — LOI [id]/index.tsx (LOADING)</Text>
-</View>
           <ActivityIndicator color={colors.primary} />
-          <Text style={styles.centerHint}>Chargement de la fiche loiâ€¦</Text>
+          <Text style={styles.centerHint}>Chargement de la fiche loi…</Text>
         </View>
       </SafeAreaView>
     );
@@ -307,19 +301,16 @@ export default function LoiDetailV1Screen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
-<View style={{ backgroundColor: "red", padding: 10, borderRadius: 12, marginBottom: 12 }}>
-  <Text style={{ color: "white", fontWeight: "900" }}>DEBUG — LOI [id]/index.tsx (LOADING)</Text>
-</View>
-          <Text style={styles.errorText}>{error ?? "Aucune donnÃ©e disponible."}</Text>
+          <Text style={styles.errorText}>{error ?? "Aucune donnée disponible."}</Text>
 
           <View style={{ height: 12 }} />
 
           <Pressable style={styles.actionBtn} onPress={runLoad}>
-            <Text style={styles.actionBtnText}>RÃ©essayer</Text>
+            <Text style={styles.actionBtnText}>Réessayer</Text>
           </Pressable>
 
           <Pressable style={styles.linkBtn} onPress={() => router.back()}>
-            <Text style={styles.linkText}>â† Retour</Text>
+            <Text style={styles.linkText}>← Retour</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -331,22 +322,17 @@ export default function LoiDetailV1Screen() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
-        
-        {/* 🔴 DEBUG BANNER (temp) */}
-        <View style={{ backgroundColor: "red", padding: 10, borderRadius: 12, marginBottom: 12 }}>
-          <Text style={{ color: "white", fontWeight: "900" }}>DEBUG — index.tsx chargé</Text>
-        </View>
-{fromKey ? (
+        {fromKey ? (
           <View style={styles.contextBar}>
             <View style={{ flex: 1 }}>
               <Text style={styles.contextKicker}>Tu viens de</Text>
               <Text style={styles.contextTitle} numberOfLines={1}>
-                {fromLabel ?? "un rÃ©cit"}
+                {fromLabel ?? "un récit"}
               </Text>
             </View>
 
             <Pressable onPress={() => router.back()} style={styles.contextBtn}>
-              <Text style={styles.contextBtnText}>â† Retour</Text>
+              <Text style={styles.contextBtnText}>← Retour</Text>
             </Pressable>
           </View>
         ) : null}
@@ -392,8 +378,8 @@ export default function LoiDetailV1Screen() {
               style={styles.proofCta}
               onPress={() => router.push(routeFromItemId(String(dto!.timeline!.key_scrutin!.numero)) as any)}
             >
-              <Text style={styles.proofCtaTitle}>Voir la preuve (scrutin clÃ©)</Text>
-              <Text style={styles.proofCtaSub}>Ouvre le dÃ©tail du vote {String(dto!.timeline!.key_scrutin!.numero)}</Text>
+              <Text style={styles.proofCtaTitle}>Voir la preuve (scrutin clé)</Text>
+              <Text style={styles.proofCtaSub}>Ouvre le détail du vote {String(dto!.timeline!.key_scrutin!.numero)}</Text>
             </Pressable>
           </FadeInUp>
         ) : null}
@@ -478,5 +464,3 @@ const styles = StyleSheet.create({
     opacity: 0.85,
   },
 });
-
-
