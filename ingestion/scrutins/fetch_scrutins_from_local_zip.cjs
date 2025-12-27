@@ -7,7 +7,7 @@ const { createClient } = require("@supabase/supabase-js");
 
 // Helpers dans ingestion/lib
 const { inferScrutinKind } = require("../lib/inferScrutinKind.cjs");
-const { computeLoiGroupKey.cjs } = require("../lib/computeLoiGroupKey.cjs");
+const { computeLoiGroupKey } = require("../lib/computeLoiGroupKey.cjs");
 
 // ? charge ingestion/.env (et pas un .env au hasard du cwd)
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
