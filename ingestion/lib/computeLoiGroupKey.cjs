@@ -7,7 +7,7 @@ function normalizeBase(str) {
     .trim();
 }
 
-function computeLoiGroupKey.cjs(titre, objet, type_texte) {
+function computeLoiGroupKey(titre, objet, type_texte) {
   const srcRaw = titre || objet || "";
   const srcNorm = normalizeBase(srcRaw);
   if (!srcNorm) return null;
@@ -48,4 +48,4 @@ function computeLoiGroupKey.cjs(titre, objet, type_texte) {
   return slug || null;
 }
 
-module.exports = { computeLoiGroupKey.cjs };
+module.exports = { computeLoiGroupKey };
