@@ -14,14 +14,17 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { theme } from "../../../lib/theme";
 import { fetchActuItems, type ActuItem as ActuItemDB } from "@/lib/queries/actu";
 import { groupActuItems, type GroupedActuRow } from "@/lib/actu/grouping";
 
-import { ActuCard, HeroActuCard } from "@/components/actu";
+import ActuBulletinRow from "@/components/actu/ActuBulletinRow";
 import type { ActuItemUI, Tone } from "@/components/actu/types";
 
-const colors = theme.colors;
+const PAPER = "#F6F1E8";
+const PAPER_CARD = "#FBF7F0";
+const INK = "#121417";
+const INK_SOFT = "rgba(18,20,23,0.72)";
+const LINE = "rgba(18,20,23,0.14)";
 
 /** =========================
  *  ACTU CAP (Option A)
@@ -45,6 +48,9 @@ function dlog(...args: any[]) {
   console.log(...args);
 }
 
+/* ─────────────────────────────
+   Temps / buckets (stable)
+   ───────────────────────────── */
 function toISO(input?: string | null): string {
   if (!input) return new Date().toISOString();
   const t = new Date(input).getTime();
@@ -60,16 +66,19 @@ function daysAgo(dateISO: string) {
 
 function bucketLabel(dateISO: string) {
   const d = daysAgo(dateISO);
-  if (d <= 1) return "AUJOURD’HUI";
-  if (d <= 7) return "CETTE SEMAINE";
+  if (d <= 0) return "AUJOURD’HUI";
+  if (d <= 6) return "CETTE SEMAINE";
+  if (d <= 13) return "SEMAINE DERNIÈRE";
   return "PLUS TÔT";
 }
 
 type Row =
-  | { kind: "hero"; item: ActuItemUI }
   | { kind: "header"; title: string }
-  | { kind: "item"; item: ActuItemUI };
+  | { kind: "item"; item: ActuItemUI & { why?: string; deltaLine?: string; badge?: string } };
 
+/* ─────────────────────────────
+   UI picks
+   ───────────────────────────── */
 function pickTone(it: ActuItemDB): Tone {
   if (it.entity === "scrutin") return "violet";
   if (it.entity === "loi") return "blue";
@@ -99,10 +108,6 @@ function pickTag(it: ActuItemDB): string | undefined {
   return undefined;
 }
 
-function ctaLabel(_it: ActuItemUI) {
-  return "Voir le récit";
-}
-
 function SectionHeader({ title }: { title: string }) {
   return (
     <View style={styles.sectionHeader}>
@@ -112,82 +117,15 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
-/** ===== Hero editorial (anti-bruit) ===== */
-function isNoLoi(loi_id?: string | null) {
-  return !loi_id || loi_id === "no-loi";
-}
+/* ─────────────────────────────
+   String helpers
+   ───────────────────────────── */
 function cleanSpaces(s: string) {
   return String(s ?? "").replace(/\s+/g, " ").trim();
 }
-function isGenericTitle(t?: string | null) {
-  if (!t) return true;
-  const s = t.toLowerCase();
-  return (
-    s.includes("activité parlementaire") ||
-    s.includes("sujet parlementaire") ||
-    /\b\d+\s+scrutin/.test(s)
-  );
-}
-function isNoiseGroup(g: GroupedActuRow) {
-  const gg = g as any;
-  const scr = gg.summary?.scrutins ?? 0;
-  const loi_id: string | null | undefined = gg.loi_id ?? null;
-  return isNoLoi(loi_id) && scr >= 12;
-}
-function pickHeroGroup(groups: GroupedActuRow[]) {
-  if (!groups?.length) return null;
-
-  const sorted = [...groups].sort((a, b) =>
-    String((b as any).dateMax ?? "").localeCompare(String((a as any).dateMax ?? ""))
-  );
-
-  const candidates = sorted.filter((g) => !isNoiseGroup(g));
-
-  const bestClearLoi = candidates.find((g) => !isNoLoi((g as any).loi_id ?? null));
-  if (bestClearLoi) {
-    const age = daysAgo(toISO((bestClearLoi as any).dateMax ?? null));
-    if (age <= 14) return bestClearLoi;
-  }
-
-  const bestNonGeneric = candidates.find((g) => {
-    const t = (g as any).display?.title ?? null;
-    return !isGenericTitle(t);
-  });
-  if (bestNonGeneric) return bestNonGeneric;
-
-  return candidates[0] ?? sorted[0] ?? null;
-}
-
-/** ✅ Agrégation par loiKey (row.loi_id) pour afficher les "vrais" volumes */
-type LoiAgg = {
-  scrutins: number;
-  amendements: number;
-  articles: number;
-  total: number;
-  lastDateMax: string;
-};
-
-function formatAggLine(agg?: LoiAgg) {
-  if (!agg) return undefined;
-  const parts: string[] = [];
-  if (agg.scrutins) parts.push(`${agg.scrutins} vote${agg.scrutins > 1 ? "s" : ""}`);
-  if (agg.amendements)
-    parts.push(`${agg.amendements} amendement${agg.amendements > 1 ? "s" : ""}`);
-  if (agg.articles) parts.push(`${agg.articles} article${agg.articles > 1 ? "s" : ""}`);
-  return parts.join(" • ");
-}
-
-function cleanOfficialTitle(raw: string, editorialTitle: string) {
-  const t = cleanSpaces(raw);
-  if (!t) return "";
-  if (cleanSpaces(editorialTitle).toLowerCase() === t.toLowerCase()) return "";
-  return t;
-}
-
 function normApos(s: string) {
   return cleanSpaces(String(s ?? "")).replace(/[’]/g, "'");
 }
-
 function isVoteOnAmendement(officialRaw: string): boolean {
   const s = normApos(officialRaw).toLowerCase();
   return (
@@ -197,20 +135,17 @@ function isVoteOnAmendement(officialRaw: string): boolean {
     s.includes("amendement identique")
   );
 }
-
 function extractAmendementNumber(officialRaw: string): string {
   const s = normApos(officialRaw);
   const m = s.match(/\b(?:sous-)?amendement\b.*?\bn[°º]\s*(\d+)/i);
   return m?.[1] ? String(m[1]).trim() : "";
 }
-
 function extractArticleRef(officialRaw: string): string {
   const s = normApos(officialRaw);
   const m = s.match(/\b(?:a|à)\s+l'article\s+([^()]+?)(?:\s+du|\s+de\s+la|\s+\(|\.|$)/i);
   if (!m?.[1]) return "";
   return cleanSpaces(m[1]).replace(/\s+et\s+annexe.*$/i, "").trim();
 }
-
 function buildAmendementKicker(officialRaw: string): string | null {
   if (!officialRaw) return null;
   if (!isVoteOnAmendement(officialRaw)) return null;
@@ -241,25 +176,16 @@ function secondaryLine(row: GroupedActuRow) {
     const officialRaw = first?.objet ?? first?.titre ?? first?.title ?? first?.subtitle ?? "";
 
     const kicker = buildAmendementKicker(officialRaw);
-    if (kicker) return kicker;
+    if (kicker) return `Vote sur ${kicker}`;
 
-    return phase ? `Vote — ${phase}` : "Vote à l’Assemblée";
+    return phase ? `Scrutin — ${phase}` : "Scrutin en séance";
   }
 
-  if (e === "amendement") return phase ? `Amendements — ${phase}` : "Modifications du texte";
+  if (e === "amendement") return phase ? `Amendements — ${phase}` : "Modification du texte";
   if (e === "motion") return "Événement parlementaire";
   if (e === "declaration") return "Déclaration politique";
 
   return phase ? `Avancée — ${phase}` : "Dernières avancées";
-}
-
-function buildHighlights(row: GroupedActuRow): string[] {
-  const e = row.entity;
-  if (e === "scrutin") return ["En clair → preuves → étapes", "Positions des groupes + détail du vote"];
-  if (e === "amendement") return ["En clair → preuves → étapes", "Ce que ça change dans le texte"];
-  if (e === "motion") return ["En clair → preuves → étapes", "Pourquoi c’est arrivé"];
-  if (e === "declaration") return ["En clair → preuves → étapes", "Le message & ses conséquences"];
-  return ["En clair → preuves → étapes", "Suivi du dossier"];
 }
 
 function isBadListTitle(t?: string | null) {
@@ -275,7 +201,7 @@ function isBadListTitle(t?: string | null) {
 }
 function fallbackTitleForEntity(entity: string) {
   if (entity === "amendement") return "Modifier le texte de loi";
-  if (entity === "scrutin") return "Vote à l’Assemblée";
+  if (entity === "scrutin") return "Vote au Parlement";
   if (entity === "declaration") return "Déclaration politique";
   if (entity === "motion") return "Événement parlementaire";
   return "Avancée législative";
@@ -288,18 +214,30 @@ function maybePrefixLoi(entity: string, t: string) {
   return `Loi : ${clean}`;
 }
 
-/** =========================
- *  DEBUG HELPERS (TOP loi_id)
- * ========================= */
-function short(s: any, max = 90) {
-  const t = String(s ?? "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  return t.length <= max ? t : t.slice(0, max) + "…";
+/** ✅ Agrégation par loiKey (canon) */
+type LoiAgg = {
+  scrutins: number;
+  amendements: number;
+  articles: number;
+  total: number;
+  lastDateMax: string;
+};
+
+function formatAggLine(agg?: LoiAgg) {
+  if (!agg) return undefined;
+  const parts: string[] = [];
+  if (agg.scrutins) parts.push(`${agg.scrutins} vote${agg.scrutins > 1 ? "s" : ""}`);
+  if (agg.amendements)
+    parts.push(`${agg.amendements} amendement${agg.amendements > 1 ? "s" : ""}`);
+  if (agg.articles) parts.push(`${agg.articles} article${agg.articles > 1 ? "s" : ""}`);
+  return parts.join(" • ");
 }
 
-function pickExampleTitle(it: any): string {
-  const raw = String(it?.title ?? it?.objet ?? it?.titre ?? it?.subtitle ?? "").trim();
-  return raw ? short(raw, 90) : "";
+function cleanOfficialTitle(raw: string, editorialTitle: string) {
+  const t = cleanSpaces(raw);
+  if (!t) return "";
+  if (cleanSpaces(editorialTitle).toLowerCase() === t.toLowerCase()) return "";
+  return t;
 }
 
 function normalizeLoiIdForLogs(v: any): string {
@@ -307,12 +245,159 @@ function normalizeLoiIdForLogs(v: any): string {
   return s ? s : "no-loi";
 }
 
+/* ─────────────────────────────
+   ✅ Canonicalisation loi_id (PROD)
+   Objectif: fusionner ordinaire/solennel/variantes scrutin-* sur la même loi.
+   Priorité:
+   1) loi_id_canon si présent (row ou item)
+   2) noyau à partir de "projet-de-loi" / "proposition-de-loi"
+   3) fallback = loi_id brut
+   ───────────────────────────── */
+function normKey(s: any): string {
+  return String(s ?? "").trim().toLowerCase();
+}
+
+function canonFromSlug(loiIdRaw: string): string | null {
+  let s = normKey(loiIdRaw);
+  if (!s) return null;
+
+  // ✅ Fix troncatures fréquentes observées : "...-de-la-lo" => "...-de-la-loi"
+  // (tu peux en ajouter d'autres si tu repères des patterns)
+  s = s
+    .replace(/-de-la-lo$/i, "-de-la-loi")
+    .replace(/-de-la-l$/i, "-de-la-loi") // ultra défensif
+    .replace(/-de-la-$/i, "-de-la-loi"); // ultra défensif
+
+  // Si on trouve le noyau "projet-de-loi..." ou "proposition-de-loi..."
+  const idxPjl = s.indexOf("projet-de-loi");
+  const idxPpl = s.indexOf("proposition-de-loi");
+  const idx = idxPjl >= 0 ? idxPjl : idxPpl;
+
+  if (idx >= 0) {
+    let core = s.slice(idx);
+
+    // ✅ applique aussi le fix sur le core (au cas où)
+    core = core
+      .replace(/-de-la-lo$/i, "-de-la-loi")
+      .replace(/-de-la-l$/i, "-de-la-loi")
+      .replace(/-de-la-$/i, "-de-la-loi");
+
+    return core ? `loi:${core}` : null;
+  }
+
+  // sinon, on retire quelques variantes fréquentes "scrutin-public-(ordinaire|solennel)-"
+  const simplified = s
+    .replace("scrutin-public-ordinaire-", "scrutin-public-")
+    .replace("scrutin-public-solennel-", "scrutin-public-");
+
+  return simplified ? `loi:${simplified}` : null;
+}
+
+
+function getCanonLoiKeyFromRowOrItems(row: any): string {
+  const direct =
+    row?.loi_id_canon ||
+    row?.loi_id_canonical ||
+    row?.loi_id_canonique ||
+    row?.loi_id_canonized ||
+    null;
+
+  if (direct) return String(direct);
+
+  // dans les items
+  const first = (row?.items ?? [])[0] ?? null;
+  const itemCanon =
+    first?.loi_id_canon ||
+    first?.loi_id_canonical ||
+    first?.loi_id_canonique ||
+    first?.loi_id_canonized ||
+    null;
+
+  if (itemCanon) return String(itemCanon);
+
+  const raw = row?.loi_id || first?.loi_id || row?.groupKey || "";
+  return canonFromSlug(String(raw)) ?? String(raw ?? "no-loi");
+}
+
+/* ─────────────────────────────
+   Regroupement intelligent par loi (anti doublons)
+   ───────────────────────────── */
+type StoryAgg = {
+  canonKey: string;
+  loiKeyRaw: string;
+  entity: string;
+  groupKey: string; // route
+  dateMax: string;
+  items: any[];
+  summary: { total: number; scrutins: number; amendements: number; articles: number };
+  display?: any;
+  phase_label?: string;
+};
+
+function nint(x: any) {
+  const n = Number(x ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pickBadgeForStory(
+  title: string,
+  agg: LoiAgg
+): "CLÉ" | "STRUCTURANT" | "SYMBOLIQUE" | undefined {
+  const t = cleanSpaces(title).toLowerCase();
+
+  if (
+    t.includes("49-3") ||
+    t.includes("cmp") ||
+    t.includes("adoption définitive") ||
+    t.includes("motion de censure") ||
+    t.includes("constitution")
+  ) {
+    return "CLÉ";
+  }
+
+  if (
+    agg.total >= 80 ||
+    agg.scrutins >= 5 ||
+    t.includes("plf") ||
+    t.includes("loi de finances") ||
+    t.includes("retrait") ||
+    t.includes("immigration") ||
+    t.includes("budget")
+  ) {
+    return "STRUCTURANT";
+  }
+
+  if (
+    agg.total <= 15 &&
+    (t.includes("reparation") ||
+      t.includes("mémoire") ||
+      t.includes("memoire") ||
+      t.includes("egalite") ||
+      t.includes("droits") ||
+      t.includes("hommage"))
+  ) {
+    return "SYMBOLIQUE";
+  }
+
+  return undefined;
+}
+
+/** -------------------------
+ * DEBUG helpers (inchangés)
+ * ------------------------- */
+function short(s: any, max = 90) {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length <= max ? t : t.slice(0, max) + "…";
+}
+function pickExampleTitle(it: any): string {
+  const raw = String(it?.title ?? it?.objet ?? it?.titre ?? it?.subtitle ?? "").trim();
+  return raw ? short(raw, 90) : "";
+}
 function isNoLoiId(loiId: string) {
   const s = String(loiId ?? "").trim();
   return !s || s === "no-loi";
 }
-
-/** ✅ IMPORTANT: "suspicious" = ID événement (numérique), PAS "scrutin-public-..." */
 function isEventIdLike(loiId: string) {
   const s = String(loiId ?? "").trim();
   if (!s) return false;
@@ -321,8 +406,6 @@ function isEventIdLike(loiId: string) {
   if (/^declaration-\d+$/i.test(s)) return true;
   return false;
 }
-
-/** ✅ Mini-log ratio loi_id (rawDB) : eventIdLike vs no-loi vs ok */
 function logSuspiciousRatioInRawDB(rawDB: ActuItemDB[]) {
   const total = rawDB?.length ?? 0;
   if (!total) return;
@@ -396,7 +479,6 @@ function logSuspiciousRatioInRawDB(rawDB: ActuItemDB[]) {
   }
   dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
-
 function logTopLoiIdInRawDB(rawDB: ActuItemDB[], topN = 12) {
   const total = rawDB?.length ?? 0;
   if (!total) return;
@@ -406,9 +488,8 @@ function logTopLoiIdInRawDB(rawDB: ActuItemDB[], topN = 12) {
   for (const it of rawDB as any[]) {
     const loiId = normalizeLoiIdForLogs((it as any)?.loi_id);
     const prev = map.get(loiId);
-    if (!prev) {
-      map.set(loiId, { count: 1, exTitle: pickExampleTitle(it) });
-    } else {
+    if (!prev) map.set(loiId, { count: 1, exTitle: pickExampleTitle(it) });
+    else {
       prev.count += 1;
       if (!prev.exTitle) prev.exTitle = pickExampleTitle(it);
       map.set(loiId, prev);
@@ -419,22 +500,18 @@ function logTopLoiIdInRawDB(rawDB: ActuItemDB[], topN = 12) {
 
   dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   dlog(`[ACTU] TOP loi_id dans rawDB (nb items + ex "titre")`);
-
   top.forEach(([loiId, meta], i) => {
     const flag = isEventIdLike(loiId) ? "⚠️ " : "";
     const ex = meta.exTitle ? ` | ex="${meta.exTitle}"` : "";
     dlog(`#${i + 1} ${flag}${meta.count} | ${short(loiId, 110)}${ex}`);
   });
-
   dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
-
 function logTopLoiIdInGroups(groups: any[], topN = 12) {
   const total = groups?.length ?? 0;
   if (!total) return;
 
   const counts = new Map<string, number>();
-
   for (const g of groups as any[]) {
     const loiId = normalizeLoiIdForLogs(g?.loi_id);
     const n = Number(g?.summary?.total ?? g?.items?.length ?? 0);
@@ -449,8 +526,6 @@ function logTopLoiIdInGroups(groups: any[], topN = 12) {
   top.forEach(([k, n], i) => dlog(`#${i + 1} ${n} | ${short(k, 110)}`));
   dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
-
-/** ✅ NEW: log brut des "no-loi" pour identifier la source */
 function logNoLoiSample(rawDB: ActuItemDB[], maxRows = 12) {
   const total = rawDB?.length ?? 0;
   if (!total) return;
@@ -512,17 +587,12 @@ export default function ActuIndexScreen() {
   /**
    * ✅ FIX: fallback loi_id -> id (slug stable)
    * - évite "no-loi"
-   * - stabilise group/coarse/agg pour motions/déclarations aussi
    */
   const rawDBFixed = useMemo(() => {
     return (rawDB ?? []).map((it: any) => {
       const loiId = (it?.loi_id ?? "").toString().trim();
       if (loiId) return it;
-
-      if (it?.id) {
-        return { ...it, loi_id: String(it.id) };
-      }
-
+      if (it?.id) return { ...it, loi_id: String(it.id) };
       return it;
     });
   }, [rawDB]);
@@ -581,19 +651,16 @@ export default function ActuIndexScreen() {
     return out;
   }, [groupedRowsStrict]);
 
-  /** ✅ Actu = COARSE */
-  const groupedRows = groupedRowsCoarse;
-
-  /** ✅ build agg map by loi_id (loiKey) depuis COARSE */
+  /** ✅ loiAggMap basé sur la clé CANON (anti ordinaire/solennel) */
   const loiAggMap = useMemo(() => {
     const m = new Map<string, LoiAgg>();
 
-    for (const g of groupedRows) {
-      const loiKey = normalizeLoiIdForLogs((g as any).loi_id);
-      if (!loiKey || loiKey === "no-loi") continue;
+    for (const g of groupedRowsCoarse as any[]) {
+      const canonKey = getCanonLoiKeyFromRowOrItems(g);
+      if (!canonKey || canonKey === "no-loi") continue;
 
       const prev =
-        m.get(loiKey) ??
+        m.get(canonKey) ??
         ({
           scrutins: 0,
           amendements: 0,
@@ -602,111 +669,116 @@ export default function ActuIndexScreen() {
           lastDateMax: "",
         } as LoiAgg);
 
-      prev.scrutins += Number(g.summary?.scrutins ?? 0);
-      prev.amendements += Number(g.summary?.amendements ?? 0);
-      prev.articles += Number(g.summary?.articles ?? 0);
-      prev.total += Number(g.summary?.total ?? 0);
+      prev.scrutins += nint(g.summary?.scrutins);
+      prev.amendements += nint(g.summary?.amendements);
+      prev.articles += nint(g.summary?.articles);
+      prev.total += nint(g.summary?.total);
 
       const d = String((g as any).dateMax ?? "");
       if (d && d > prev.lastDateMax) prev.lastDateMax = d;
 
-      m.set(loiKey, prev);
+      m.set(canonKey, prev);
     }
 
     return m;
-  }, [groupedRows]);
+  }, [groupedRowsCoarse]);
 
-  /** Logs (STRICT + COARSE + TOP loi_id + ratio + no-loi sample) */
+  /**
+   * ✅ Regroupement intelligent anti-doublons
+   * - 1 story par CANON key (même loi, même si 2 loi_id différents)
+   */
+  const groupedStories = useMemo(() => {
+    const map = new Map<string, StoryAgg>();
+
+    for (const g of groupedRowsCoarse as any[]) {
+      const canonKey = getCanonLoiKeyFromRowOrItems(g);
+      if (!canonKey || canonKey === "no-loi") continue;
+
+      const prev = map.get(canonKey);
+      const gDateMax = String(g?.dateMax ?? "");
+      const gSummary = {
+        total: nint(g.summary?.total ?? (g.items?.length ?? 0)),
+        scrutins: nint(g.summary?.scrutins),
+        amendements: nint(g.summary?.amendements),
+        articles: nint(g.summary?.articles),
+      };
+
+      if (!prev) {
+        map.set(canonKey, {
+          canonKey,
+          loiKeyRaw: String(g?.loi_id ?? ""),
+          entity: String(g.entity ?? ""),
+          groupKey: String(g.groupKey ?? canonKey),
+          dateMax: gDateMax,
+          items: [...(g.items ?? [])],
+          summary: { ...gSummary },
+          display: (g as any)?.display,
+          phase_label: (g as any)?.phase_label,
+        });
+        continue;
+      }
+
+      prev.items.push(...(g.items ?? []));
+      prev.summary.total += gSummary.total;
+      prev.summary.scrutins += gSummary.scrutins;
+      prev.summary.amendements += gSummary.amendements;
+      prev.summary.articles += gSummary.articles;
+
+      // garde le groupe dominant = le plus récent (pour le routage)
+      if (gDateMax && (!prev.dateMax || gDateMax > prev.dateMax)) {
+        prev.dateMax = gDateMax;
+        prev.groupKey = String(g.groupKey ?? prev.groupKey);
+        prev.entity = String(g.entity ?? prev.entity);
+        prev.display = (g as any)?.display ?? prev.display;
+        prev.phase_label = (g as any)?.phase_label ?? prev.phase_label;
+        prev.loiKeyRaw = String(g?.loi_id ?? prev.loiKeyRaw);
+      }
+
+      // cap preview
+      if (ACTU_FEED_MAX_ITEMS_PER_STORY > 0 && prev.items.length > ACTU_FEED_MAX_ITEMS_PER_STORY) {
+        prev.items.sort((a: any, b: any) => String(b?.date ?? "").localeCompare(String(a?.date ?? "")));
+        prev.items = prev.items.slice(0, ACTU_FEED_MAX_ITEMS_PER_STORY);
+      }
+
+      map.set(canonKey, prev);
+    }
+
+    const out = Array.from(map.values());
+    out.sort((a, b) => String(b?.dateMax ?? "").localeCompare(String(a?.dateMax ?? "")));
+    return out;
+  }, [groupedRowsCoarse]);
+
   useEffect(() => {
     if (!DEBUG_ACTU) return;
-
     logSuspiciousRatioInRawDB(rawDBFixed);
     logTopLoiIdInRawDB(rawDBFixed, 12);
     logNoLoiSample(rawDBFixed, 12);
-
-    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    dlog("[ACTU] TOP RECITS (STRICT)");
-    [...groupedRowsStrict]
-      .map((g: any) => ({
-        key: g.groupKey,
-        title: g?.display?.title ?? "",
-        total: g?.summary?.total ?? g?.items?.length ?? 0,
-        scr: g?.summary?.scrutins ?? 0,
-        amd: g?.summary?.amendements ?? 0,
-        art: g?.summary?.articles ?? 0,
-        entity: g?.entity ?? "",
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 8)
-      .forEach((x, i) => {
-        dlog(
-          `#${i + 1} total=${x.total} scr=${x.scr} amd=${x.amd} art=${x.art} entity=${x.entity} | ${x.title} | key=${x.key}`
-        );
-      });
-    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    dlog("[ACTU] TOP RECITS (COARSE)");
-    groupedRowsCoarse.slice(0, 8).forEach((g: any, i: number) => {
-      dlog(
-        `#${i + 1} total=${g.summary?.total ?? 0} preview=${g.items?.length ?? 0} scr=${
-          g.summary?.scrutins ?? 0
-        } amd=${g.summary?.amendements ?? 0} art=${g.summary?.articles ?? 0} | ${
-          g.display?.title ?? ""
-        } | key=${g.groupKey}`
-      );
-    });
-    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    dlog("[ACTU] TOP RECITS (COARSE by total)");
-    [...groupedRowsCoarse]
-      .map((g: any) => ({
-        key: g.groupKey,
-        title: g?.display?.title ?? "",
-        total: g?.summary?.total ?? 0,
-        preview: g?.items?.length ?? 0,
-        scr: g?.summary?.scrutins ?? 0,
-        amd: g?.summary?.amendements ?? 0,
-        art: g?.summary?.articles ?? 0,
-      }))
-      .sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
-      .slice(0, 8)
-      .forEach((x, i) => {
-        dlog(
-          `#${i + 1} total=${x.total} preview=${x.preview} scr=${x.scr} amd=${x.amd} art=${x.art} | ${x.title} | key=${x.key}`
-        );
-      });
-    dlog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
     logTopLoiIdInGroups(groupedRowsCoarse as any[], 12);
-  }, [rawDBFixed, groupedRowsStrict, groupedRowsCoarse]);
+  }, [rawDBFixed, groupedRowsCoarse]);
 
-  const rawUI: ActuItemUI[] = useMemo(() => {
-    return groupedRows.map((row) => {
-      const items = row.items ?? [];
+  const rawUI: (ActuItemUI & { why?: string; deltaLine?: string; badge?: string })[] = useMemo(() => {
+    return groupedStories.map((story) => {
+      const items = story.items ?? [];
       const first = items[0];
 
       const baseDB: ActuItemDB =
         (first as any) ??
         ({
-          id: row.groupKey,
-          entity: row.entity,
-          date: (row as any).dateMax,
+          id: story.groupKey,
+          entity: story.entity,
+          date: story.dateMax,
         } as any);
 
       const { iconLib, iconName } = pickIcon(baseDB);
 
-      const displayTitle = cleanSpaces((row as any)?.display?.title ?? "");
+      const displayTitle = cleanSpaces((story as any)?.display?.title ?? "");
       let editorial = displayTitle;
 
-      let usedFallback = false;
       if (isBadListTitle(editorial)) {
-        editorial = fallbackTitleForEntity(String(row.entity));
-        usedFallback = true;
+        editorial = fallbackTitleForEntity(String(story.entity));
       }
 
-      const editorialTitle = maybePrefixLoi(String(row.entity), editorial);
+      const editorialTitle = maybePrefixLoi(String(story.entity), editorial);
 
       const officialRaw =
         (first as any)?.objet ??
@@ -715,91 +787,100 @@ export default function ActuIndexScreen() {
         (first as any)?.subtitle ??
         "";
 
-      const longTitleFromGrouping = cleanSpaces((row as any)?.display?.longTitle ?? "");
+      const longTitleFromGrouping = cleanSpaces((story as any)?.display?.longTitle ?? "");
       const longSeed = longTitleFromGrouping || officialRaw;
 
       const longTitleClean = cleanOfficialTitle(longSeed, editorialTitle);
       const longTitle = longTitleClean ? longTitleClean : undefined;
 
-      const loiKey = normalizeLoiIdForLogs((row as any).loi_id);
-      const agg = loiKey ? loiAggMap.get(loiKey) : undefined;
+      const agg = loiAggMap.get(story.canonKey);
 
       const statsLine =
         formatAggLine(agg) ??
         formatAggLine({
-          scrutins: Number(row.summary?.scrutins ?? 0),
-          amendements: Number(row.summary?.amendements ?? 0),
-          articles: Number(row.summary?.articles ?? 0),
-          total: Number(row.summary?.total ?? 0),
-          lastDateMax: String((row as any).dateMax ?? ""),
+          scrutins: nint(story.summary?.scrutins),
+          amendements: nint(story.summary?.amendements),
+          articles: nint(story.summary?.articles),
+          total: nint(story.summary?.total),
+          lastDateMax: String(story.dateMax ?? ""),
         });
 
-      const tag = (row as any).display?.tag || pickTag(baseDB);
+      const tag = (story as any).display?.tag || pickTag(baseDB);
+      const badge = agg ? pickBadgeForStory(editorialTitle, agg) : undefined;
 
-      const ui: ActuItemUI = {
-        id: row.groupKey,
-        dateISO: toISO((row as any).dateMax),
+      const ui: any = {
+        // ✅ IMPORTANT: id unique par loi (canon)
+        id: `story:${story.canonKey}`,
+        groupKey: story.groupKey,
+        canonKey: story.canonKey,
+        loiKeyRaw: story.loiKeyRaw,
+
+        dateISO: toISO(story.dateMax),
+
         title: editorialTitle,
         longTitle,
-        subtitle: secondaryLine(row),
+        subtitle: secondaryLine(story as any),
+
         tone: pickTone(baseDB),
         iconLib,
         iconName,
         tag,
         statsLine,
-        highlights: buildHighlights(row),
-        groupKey: row.groupKey,
 
-        // ✅ truth
-        groupCount: Number(row.summary?.total ?? 0) || items.length || 1,
-
-        // ✅ preview réellement affichée dans le feed
+        groupCount: nint(story.summary?.total) || items.length || 1,
         previewCount: items.length,
+
+        why: (story as any)?.display?.why ? cleanSpaces((story as any).display.why) : undefined,
+        deltaLine: (story as any)?.display?.deltaLine
+          ? cleanSpaces((story as any).display.deltaLine)
+          : undefined,
+        badge,
       };
 
-      (ui as any).__debug = {
-        entity: row.entity,
-        usedFallback,
-        displayTitle,
-        editorialTitle,
-        loiKey,
-        dateMax: (row as any)?.dateMax ?? null,
-        officialRaw,
-        groupKey: row.groupKey,
-        counts: row.summary,
-        firstId: (first as any)?.id ?? null,
-        previewCount: items.length,
-        totalReal: row.summary?.total,
-      };
-
-      return ui;
+      return ui as ActuItemUI & { why?: string; deltaLine?: string; badge?: string };
     });
-  }, [groupedRows, loiAggMap]);
+  }, [groupedStories, loiAggMap]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return rawUI;
     return rawUI.filter((x) =>
-      (`${x.title} ${x.subtitle} ${x.statsLine ?? ""} ${x.longTitle ?? ""}`)
+      (`${x.title} ${x.subtitle} ${(x as any).why ?? ""} ${(x as any).deltaLine ?? ""} ${x.longTitle ?? ""}`)
         .toLowerCase()
         .includes(s)
     );
   }, [q, rawUI]);
 
+  /**
+   * ✅ UNE DU JOUR
+   * - top 1 sur AUJOURD’HUI par volume (groupCount)
+   * - retiré du reste pour éviter doublon
+   */
   const rows: Row[] = useMemo(() => {
-    const heroGroup = pickHeroGroup(groupedRows);
-    const heroUI = heroGroup ? rawUI.find((x) => x.id === heroGroup.groupKey) ?? null : null;
+    const sorted = [...filtered].sort((a, b) => b.dateISO.localeCompare(a.dateISO));
 
-    const heroId = heroUI?.id;
-    const baseList = heroId ? filtered.filter((x) => x.id !== heroId) : filtered;
+    const today = sorted.filter((x) => daysAgo(x.dateISO) <= 0);
+    const une = [...today].sort((a, b) => {
+      const va = Number((a as any).groupCount ?? 0);
+      const vb = Number((b as any).groupCount ?? 0);
+      if (vb !== va) return vb - va;
+      return b.dateISO.localeCompare(a.dateISO);
+    });
 
-    const sortedUI = [...baseList].sort((a, b) => b.dateISO.localeCompare(a.dateISO));
+    const unePick = une.slice(0, 1);
+    const uneIds = new Set(unePick.map((x) => x.id));
+
+    const rest = sorted.filter((x) => !uneIds.has(x.id));
 
     const out: Row[] = [];
-    if (heroUI) out.push({ kind: "hero", item: heroUI });
+
+    if (unePick.length) {
+      out.push({ kind: "header", title: "UNE DU JOUR" });
+      unePick.forEach((it) => out.push({ kind: "item", item: it }));
+    }
 
     let lastBucket = "";
-    for (const it of sortedUI) {
+    for (const it of rest) {
       const b = bucketLabel(it.dateISO);
       if (b !== lastBucket) {
         out.push({ kind: "header", title: b });
@@ -807,76 +888,50 @@ export default function ActuIndexScreen() {
       }
       out.push({ kind: "item", item: it });
     }
-    return out;
-  }, [filtered, groupedRows, rawUI]);
 
-  /** Actu -> group (récit) */
+    return out;
+  }, [filtered]);
+
   const openGroup = useCallback(
     (ui: ActuItemUI) => {
-      const key = ui.groupKey || ui.id;
+      const key = (ui as any).groupKey || ui.id;
       if (!key) return;
-
-      const href = `/actu/group/${encodeURIComponent(String(key))}`;
-
-      // eslint-disable-next-line no-console
-      console.log("[ACTU CLICK]", {
-        title: ui.title,
-        groupKey: ui.groupKey,
-        id: ui.id,
-        tag: ui.tag,
-        dateISO: ui.dateISO,
-        href,
-      });
-
-      router.push(href as any);
+      router.push(`/actu/group/${encodeURIComponent(String(key))}` as any);
     },
     [router]
   );
 
   const renderRow = ({ item }: { item: Row }) => {
-    if (item.kind === "hero") {
-      return (
-        <HeroActuCard
-          item={item.item as any}
-          cta={ctaLabel(item.item)}
-          onPress={() => openGroup(item.item)}
-        />
-      );
-    }
     if (item.kind === "header") return <SectionHeader title={item.title} />;
-
-    const it = item.item;
-    return <ActuCard item={it as any} cta={ctaLabel(it)} onPress={() => openGroup(it)} />;
+    return <ActuBulletinRow item={item.item as any} onPress={() => openGroup(item.item)} />;
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <View style={styles.hTitleRow}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <Text style={styles.h1}>Actu</Text>
+          <Text style={styles.h1}>Bulletin parlementaire</Text>
 
-            {DEBUG_ACTU && (
-              <View style={styles.debugPill}>
-                <Ionicons name="bug-outline" size={14} color={colors.text} />
-                <Text style={styles.debugPillText}>DEBUG</Text>
-              </View>
-            )}
-          </View>
-
-          <View style={styles.hBadge}>
-            <Ionicons name="pulse-outline" size={14} color={colors.text} />
-            <Text style={styles.hBadgeText}>Temps réel</Text>
-          </View>
+          {DEBUG_ACTU ? (
+            <View style={styles.debugPill}>
+              <Ionicons name="bug-outline" size={14} color={INK} />
+              <Text style={styles.debugPillText}>DEBUG</Text>
+            </View>
+          ) : (
+            <View style={styles.hBadge}>
+              <Ionicons name="checkmark-circle-outline" size={14} color={INK} />
+              <Text style={styles.hBadgeText}>Vérifiable</Text>
+            </View>
+          )}
         </View>
 
-        <Text style={styles.h2}>Les moments qui comptent — en clair, en 10 secondes.</Text>
+        <Text style={styles.h2}>Décisions, votes et étapes — avec preuves.</Text>
 
         <TextInput
           value={q}
           onChangeText={setQ}
-          placeholder="Rechercher dans l’actu…"
-          placeholderTextColor={colors.subtext}
+          placeholder="Rechercher…"
+          placeholderTextColor={INK_SOFT}
           style={styles.search}
           autoCapitalize="none"
           autoCorrect={false}
@@ -887,37 +942,27 @@ export default function ActuIndexScreen() {
       {loading ? (
         <View style={{ padding: 16, gap: 10 }}>
           <ActivityIndicator />
-          <Text style={{ color: colors.subtext }}>Chargement de l’actu…</Text>
+          <Text style={{ color: INK_SOFT }}>Chargement…</Text>
         </View>
       ) : error ? (
         <View style={{ padding: 16, gap: 8 }}>
-          <Text style={{ color: colors.text, fontWeight: "900" }}>Impossible de charger l’actu</Text>
-          <Text style={{ color: colors.subtext }}>{error}</Text>
+          <Text style={{ color: INK, fontWeight: "900" }}>Impossible de charger</Text>
+          <Text style={{ color: INK_SOFT }}>{error}</Text>
           <Pressable onPress={onRefresh} style={{ marginTop: 8 }}>
-            <Text style={{ color: colors.text, fontWeight: "900" }}>Réessayer →</Text>
+            <Text style={{ color: INK, fontWeight: "900" }}>Réessayer →</Text>
           </Pressable>
         </View>
       ) : (
         <FlatList
           data={rows}
-          keyExtractor={(r, idx) =>
-            r.kind === "header"
-              ? `h-${r.title}-${idx}`
-              : r.kind === "hero"
-              ? `hero-${r.item.id}`
-              : `i-${r.item.id}`
-          }
+          keyExtractor={(r, idx) => (r.kind === "header" ? `h-${r.title}-${idx}` : `i-${r.item.id}`)}
           renderItem={renderRow}
-          contentContainerStyle={styles.list}
-          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.text} />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={{ paddingBottom: 24 }}
+          ItemSeparatorComponent={() => <View style={styles.sep} />}
           ListEmptyComponent={
             <View style={{ padding: 16 }}>
-              <Text style={{ color: colors.subtext }}>
-                Aucun élément d’actu ne correspond à ta recherche.
-              </Text>
+              <Text style={{ color: INK_SOFT }}>Aucun élément ne correspond à ta recherche.</Text>
             </View>
           }
         />
@@ -927,17 +972,25 @@ export default function ActuIndexScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
+  safe: { flex: 1, backgroundColor: PAPER },
 
-  header: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 12, gap: 8 },
+  header: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, gap: 8 },
+  hTitleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
 
-  hTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
+  h1: { color: INK, fontSize: 20, fontWeight: "900", letterSpacing: 0.2 },
+  h2: { color: INK_SOFT, fontSize: 12, lineHeight: 16, fontWeight: "800" },
+
+  search: {
+    backgroundColor: PAPER_CARD,
+    borderColor: LINE,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: INK,
+    fontSize: 14,
+    fontWeight: "800",
   },
-  h1: { color: colors.text, fontSize: 24, fontWeight: "900", letterSpacing: 0.2 },
 
   debugPill: {
     flexDirection: "row",
@@ -946,11 +999,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: PAPER_CARD,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderColor: LINE,
   },
-  debugPillText: { color: colors.text, fontSize: 12, fontWeight: "900", letterSpacing: 0.6 },
+  debugPillText: { color: INK, fontSize: 12, fontWeight: "900", letterSpacing: 0.6 },
 
   hBadge: {
     flexDirection: "row",
@@ -959,27 +1012,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: PAPER_CARD,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.10)",
+    borderColor: LINE,
   },
-  hBadgeText: { color: colors.text, fontSize: 12, fontWeight: "800" },
-  h2: { color: colors.subtext, fontSize: 12, lineHeight: 16 },
+  hBadgeText: { color: INK, fontSize: 12, fontWeight: "900" },
 
-  search: {
-    backgroundColor: colors.card,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: colors.text,
-    fontSize: 14,
-  },
+  sectionHeader: { paddingTop: 10, paddingBottom: 6, paddingHorizontal: 16, gap: 8 },
+  sectionTitle: { color: INK_SOFT, fontSize: 12, fontWeight: "900", letterSpacing: 1.4 },
+  sectionLine: { height: 1, backgroundColor: LINE },
 
-  list: { paddingHorizontal: 16, paddingBottom: 24, paddingTop: 4 },
-
-  sectionHeader: { paddingTop: 8, paddingBottom: 2, gap: 8 },
-  sectionTitle: { color: colors.subtext, fontSize: 12, fontWeight: "900", letterSpacing: 1.2 },
-  sectionLine: { height: 1, backgroundColor: "rgba(255,255,255,0.08)" },
+  sep: { height: 10 },
 });
