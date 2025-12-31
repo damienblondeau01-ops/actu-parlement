@@ -44,7 +44,10 @@ import { buildTLDRv0 } from "@/lib/lois/tldr";
 import LoiSourcesBlock from "@/components/loi/LoiSourcesBlock";
 
 import { generateEnClairV1 } from "@/lib/ai/enClair";
-import type { EnClairItem } from "@/lib/ai/types";
+import type { EnClairItem } from "@/lib/ai/types";import { supabase } from "@/lib/supabaseClient";
+
+
+
 
 // ✅ Votes (V0) — par scrutin / par groupes
 import {
@@ -706,6 +709,28 @@ export default function LoiDetailCanonScreen() {
             Array.isArray(tl) ? tl.length : 0
           );
         }
+
+// ✅ Fallback ultime: si on vient d'Actu avec un seedScrutin,
+// on résout le "vrai" loi_id utilisé dans scrutins_par_loi_app via numero_scrutin,
+// puis on relance fetchLoiTimeline avec cette clé.
+if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
+  const seedNum = Number(seedScrutin);
+  if (!Number.isNaN(seedNum)) {
+    const { data: seedRow, error: seedErr } = await supabase
+      .from("scrutins_par_loi_app")
+      .select("loi_id")
+      .eq("numero_scrutin", seedNum)
+      .limit(1)
+      .maybeSingle();
+
+    if (!seedErr && seedRow?.loi_id) {
+      console.log("[LOI TIMELINE] seed resolve loi_id =", seedRow.loi_id);
+      tl = await fetchLoiTimeline(String(seedRow.loi_id), 500);
+    } else {
+      console.log("[LOI TIMELINE] seed resolve failed", { seedScrutin, seedErr });
+    }
+  }
+}
 
         const rows = Array.isArray(tl) ? ((tl as any) as LoiTimelineRow[]) : [];
 

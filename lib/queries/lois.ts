@@ -327,6 +327,19 @@ const UNIFIED_TIMELINE_SELECT_NO_LEGISLATURE = `
   kind,
   article_ref,
   loi_id_canon,
+  loi_id_scrutin
+`;
+
+// ✅ si la colonne existe dans ta DB, on pourra la prendre, sinon fallback safe
+const UNIFIED_TIMELINE_SELECT_WITH_DOSSIER = `
+  numero_scrutin,
+  date_scrutin,
+  titre,
+  objet,
+  resultat,
+  kind,
+  article_ref,
+  loi_id_canon,
   loi_id_scrutin,
   dossier_id
 `;
@@ -337,23 +350,38 @@ async function resolveDossierIdFromCanonKey(
   const ck = String(canonKey ?? "").trim();
   if (!ck || !ck.startsWith("loi:")) return null;
 
-  const { data, error } = await fromSafe(
-    VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any
-  )
+  // 1) tentative avec dossier_id (si la colonne existe)
+  const r1 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
     .select("dossier_id, loi_id_scrutin, loi_id_canon, date_scrutin")
     .or(`loi_id_canon.eq.${ck},loi_id_scrutin.eq.${ck}`)
     .order("date_scrutin", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (error) return null;
+  if (!r1.error) {
+    const dossierId = String((r1.data as any)?.dossier_id ?? "").trim();
+    if (dossierId) return dossierId;
 
-  const dossierId = String((data as any)?.dossier_id ?? "").trim();
-  if (dossierId) return dossierId;
+    const alt = String((r1.data as any)?.loi_id_scrutin ?? "").trim();
+    return alt || null;
+  }
 
-  // fallback : parfois on n’a pas dossier_id mais on a un slug ailleurs
-  const alt = String((data as any)?.loi_id_scrutin ?? "").trim();
-  return alt || null;
+  // 2) fallback sans dossier_id (si colonne absente)
+  if (isMissingColumnError(r1.error)) {
+    const r2 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
+      .select("loi_id_scrutin, loi_id_canon, date_scrutin")
+      .or(`loi_id_canon.eq.${ck},loi_id_scrutin.eq.${ck}`)
+      .order("date_scrutin", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (r2.error) return null;
+
+    const alt = String((r2.data as any)?.loi_id_scrutin ?? "").trim();
+    return alt || null;
+  }
+
+  return null;
 }
 
 // ta view listée existe : public.scrutins_data
@@ -461,20 +489,54 @@ export async function fetchLoiTimeline(loiId: string, limit = 500) {
     }
 
     // 3) fallback ultimate : unified
-    const { data: alt, error: eAlt } = await fromSafe(
-      VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any
-    )
+    let alt: any[] | null = null;
+let eAlt: any = null;
+
+// 1) tentative avec dossier_id (si colonne existe)
+{
+  const r1 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
+    .select(UNIFIED_TIMELINE_SELECT_WITH_DOSSIER)
+    .or(`loi_id_canon.eq.${id},loi_id_scrutin.eq.${id}`)
+    .order("date_scrutin", { ascending: false })
+    .limit(limit);
+
+  if (!r1.error) {
+    alt = (r1.data ?? []) as any[];
+  } else if (isMissingColumnError(r1.error)) {
+    // 2) fallback sans dossier_id
+    const r2 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
       .select(UNIFIED_TIMELINE_SELECT_NO_LEGISLATURE)
       .or(`loi_id_canon.eq.${id},loi_id_scrutin.eq.${id}`)
       .order("date_scrutin", { ascending: false })
       .limit(limit);
 
-    console.log(
-      "[fetchLoiTimeline][fallback-unified] got =",
-      (alt ?? []).length,
-      "| error =",
-      eAlt?.message ?? null
-    );
+    alt = (r2.data ?? []) as any[];
+    eAlt = r2.error;
+  } else {
+    eAlt = r1.error;
+  }
+}
+
+console.log(
+  "[fetchLoiTimeline][fallback-unified] got =",
+  (alt ?? []).length,
+  "| error =",
+  eAlt?.message ?? null
+);
+
+if (!eAlt && Array.isArray(alt) && alt.length > 0) {
+  return alt.map((r: any) => ({
+    loi_id: id,
+    numero_scrutin: String(r.numero_scrutin ?? ""),
+    date_scrutin: r.date_scrutin ?? null,
+    titre: r.titre ?? null,
+    objet: r.objet ?? null,
+    resultat: r.resultat ?? null,
+    kind: r.kind ?? null,
+    article_ref: r.article_ref ?? null,
+    legislature: undefined,
+  })) as LoiTimelineRow[];
+}
 
     if (!eAlt && Array.isArray(alt) && alt.length > 0) {
       return alt.map((r: any) => ({
