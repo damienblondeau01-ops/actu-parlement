@@ -1,7 +1,16 @@
 // app/_layout.tsx
-import { Slot } from "expo-router";
 import React from "react";
+import { Stack } from "expo-router";
+
+const ROOT_BG = "#0B1020";
 
 export default function RootLayout() {
-  return <Slot />;
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: ROOT_BG },
+      }}
+    />
+  );
 }

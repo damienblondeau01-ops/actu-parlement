@@ -1,7 +1,6 @@
 // app/actu/group/[key].tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Animated,
   Easing,
   FlatList,
@@ -180,6 +179,15 @@ function withFromKey(path: string, fromKey?: string) {
   return `${path}${sep}fromKey=${encodeURIComponent(fk)}`;
 }
 
+function withFromLabel(path: string, fromLabel?: string) {
+  if (!path) return path;
+  const fl = cleanSpaces(fromLabel);
+  if (!fl) return path;
+  if (path.includes("fromLabel=")) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}fromLabel=${encodeURIComponent(fl)}`;
+}
+
 /** IMPORTANT: "eventIdLike" = ID événement (numérique), PAS "scrutin-public-..." */
 function isEventIdLike(loiId: string) {
   const s = cleanSpaces(loiId);
@@ -188,6 +196,20 @@ function isEventIdLike(loiId: string) {
   if (/^motion-\d+$/i.test(s)) return true;
   if (/^declaration-\d+$/i.test(s)) return true;
   return false;
+}
+
+/**
+ * ✅ NORMALISATION loiKey pour regrouper solennel/ordinaire sous la même "loi"
+ * Ex:
+ * - scrutin-public-solennel-projet-...  => scrutin-public-projet-...
+ * - scrutin-public-ordinaire-projet-... => scrutin-public-projet-...
+ */
+function normalizeLoiKeyForGrouping(raw: string) {
+  const s = cleanSpaces(raw);
+  if (!s) return s;
+  return s
+    .replace(/^scrutin-public-solennel-/i, "scrutin-public-")
+    .replace(/^scrutin-public-ordinaire-/i, "scrutin-public-");
 }
 
 function isDigits(s: string) {
@@ -266,12 +288,14 @@ function buildStepTitle(it: any, entity: string) {
   if (entity === "declaration") return "Déclaration";
   if (entity === "motion") return "Événement";
   if (entity === "loi") return "Loi";
+  if (entity === "article") return "Article";
   return "Élément";
 }
 
 function labelForEntity(entity: string) {
   if (entity === "scrutin") return "Vote";
   if (entity === "amendement") return "Amendement";
+  if (entity === "article") return "Article";
   if (entity === "loi") return "Loi";
   if (entity === "motion") return "Événement";
   if (entity === "declaration") return "Déclaration";
@@ -311,6 +335,10 @@ function normalizeHref(it: ActuItemDB): string | null {
   return rawHref || null;
 }
 
+/**
+ * ✅ On garde un "loiId routable" strict (si DLR/loi-...) — sinon null.
+ * (utile si tu as des fiches loi "officielles")
+ */
 function findRoutableLoiId(group?: GroupedActuRow | null): string | null {
   if (!group?.items?.length) return null;
 
@@ -320,10 +348,39 @@ function findRoutableLoiId(group?: GroupedActuRow | null): string | null {
     if (loiId === "no-loi") continue;
     if (isEventIdLike(loiId)) continue;
 
+    // ✅ On exclut les slugs de scrutin pour "loiIdRoutable strict"
+    if (loiId.startsWith("scrutin-public-")) continue;
+    if (loiId.startsWith("scrutin-public-solennel-")) continue;
+    if (loiId.startsWith("scrutin-public-ordinaire-")) continue;
+
     if (/^DLR/i.test(loiId)) return loiId;
     if (loiId.startsWith("loi-")) return loiId;
-    if (loiId.startsWith("scrutin-public-")) return loiId;
     if (loiId.length >= 18) return loiId;
+  }
+
+  return null;
+}
+
+/**
+ * ✅ Id canon "fiche loi" (même si ça commence par scrutin-public-...).
+ * C'est CE que tu veux pour la loi spéciale : arriver sur /lois/<canon>.
+ */
+function findLoiIdCanonForScreen(group?: GroupedActuRow | null): string | null {
+  if (!group?.items?.length) return null;
+
+  // 1) tente loi_id_canon si présent sur item
+  for (const it of group.items as any[]) {
+    const canon = cleanSpaces(it?.loi_id_canon);
+    if (canon && canon !== "no-loi") return normalizeLoiKeyForGrouping(canon);
+  }
+
+  // 2) fallback loi_id
+  for (const it of group.items as any[]) {
+    const loiId = cleanSpaces(it?.loi_id);
+    if (!loiId) continue;
+    if (loiId === "no-loi") continue;
+    if (isEventIdLike(loiId)) continue;
+    return normalizeLoiKeyForGrouping(loiId);
   }
 
   return null;
@@ -439,10 +496,18 @@ function buildEnClairBlocks({
   return { happened, resultLine, why };
 }
 
-/** COARSE key: type + loiKey (sans date/phase) */
+/**
+ * ✅ COARSE key (solennel/ordinaire => même loiKey canon)
+ * key format attendu: "type|loiKey|..."
+ */
 function baseGroupKey(k: string) {
   const parts = String(k ?? "").split("|");
-  return parts.length >= 2 ? `${parts[0]}|${parts[1]}` : k;
+  if (parts.length >= 2) {
+    const type = parts[0];
+    const loiKey = normalizeLoiKeyForGrouping(parts[1]);
+    return `${type}|${loiKey}`;
+  }
+  return k;
 }
 
 function buildCoarseGroups(strictGroups: GroupedActuRow[]) {
@@ -658,7 +723,14 @@ function ProofsAccordion({
  *  ✅ Mini Skeleton (simple + propre)
  *  ========================= */
 function SkeletonBox({ w, h, r = 12, style }: { w?: number | string; h: number; r?: number; style?: any }) {
-  return <View style={[{ width: w ?? "100%", height: h, borderRadius: r, backgroundColor: "rgba(255,255,255,0.07)" }, style]} />;
+  return (
+    <View
+      style={[
+        { width: w ?? "100%", height: h, borderRadius: r, backgroundColor: "rgba(255,255,255,0.07)" },
+        style,
+      ]}
+    />
+  );
 }
 
 function usePulse() {
@@ -681,7 +753,6 @@ function GroupSkeleton() {
   return (
     <Animated.View style={{ opacity }}>
       <View style={styles.list}>
-        {/* Hero skeleton */}
         <View style={[styles.heroWrap, { padding: 12 }]}>
           <SkeletonBox h={14} w={110} r={999} />
           <SkeletonBox h={22} w={"88%"} r={10} style={{ marginTop: 10 }} />
@@ -693,7 +764,6 @@ function GroupSkeleton() {
           </View>
         </View>
 
-        {/* Info blocks skeleton */}
         <View style={{ marginTop: 10, gap: 10 }}>
           <View style={styles.infoBlock}>
             <SkeletonBox h={12} w={90} r={8} />
@@ -709,14 +779,12 @@ function GroupSkeleton() {
           </View>
         </View>
 
-        {/* Steps title skeleton */}
         <View style={{ paddingHorizontal: 2, marginTop: 12 }}>
           <SkeletonBox h={12} w={90} r={8} />
           <SkeletonBox h={12} w={"70%"} r={8} style={{ marginTop: 10 }} />
           <View style={styles.sectionLine} />
         </View>
 
-        {/* Cards skeleton */}
         <View style={{ marginTop: 10, gap: 10 }}>
           {Array.from({ length: 6 }).map((_, i) => (
             <View key={`sk-${i}`} style={styles.card}>
@@ -737,7 +805,8 @@ export default function ActuGroupScreen() {
   const params = useLocalSearchParams<{ key?: string }>();
 
   const encodedKey = typeof params.key === "string" ? params.key : "";
-  const groupKey = useMemo(() => safeDecode(encodedKey), [encodedKey]);
+  // ✅ normalise le key entrant (solennel/ordinaire => même baseKey)
+  const groupKey = useMemo(() => baseGroupKey(safeDecode(encodedKey)), [encodedKey]);
 
   useEffect(() => {
     if (!DEV) return;
@@ -758,6 +827,9 @@ export default function ActuGroupScreen() {
   const [rawDB, setRawDB] = useState<ActuItemDB[]>([]);
   const [proofsOpen, setProofsOpen] = useState(false);
   const [showAllSteps, setShowAllSteps] = useState(false);
+
+  // ✅ PATCH UX (anti-flash) : état dédié, PAS de early return avant hooks
+  const [redirecting, setRedirecting] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -818,10 +890,17 @@ export default function ActuGroupScreen() {
     const g2 = groupedCoarse.find((g) => g.groupKey === base) ?? null;
     if (g2) return g2;
 
-    return groupedStrict.find((g) => g.groupKey === groupKey) ?? null;
+    return groupedStrict.find((g) => baseGroupKey(g.groupKey) === base) ?? null;
   }, [groupKey, groupedCoarse, groupedStrict]);
 
-  // ✅ log seulement quand on a fini de charger (sinon "found=false" pollue)
+  // ✅ reset redirect flags when key changes
+  const didRedirectRef = useRef(false);
+  useEffect(() => {
+    didRedirectRef.current = false;
+    setRedirecting(false);
+  }, [groupKey]);
+
+  // ✅ logs
   useEffect(() => {
     if (!DEV) return;
     if (loading) return;
@@ -848,8 +927,8 @@ export default function ActuGroupScreen() {
     if (!items.length) return;
 
     const loiIds = items.map((x) => cleanSpaces(x?.loi_id)).filter(Boolean);
-    const uniq = Array.from(new Set(loiIds)).slice(0, 5);
-    console.log("[GROUP loi_id uniq (top5)]", uniq);
+    const uniq = Array.from(new Set(loiIds)).slice(0, 8);
+    console.log("[GROUP loi_id uniq (top8)]", uniq);
   }, [group, loading]);
 
   const tone: Tone = useMemo(() => pickToneFromEntity(group?.entity ?? "loi"), [group?.entity]);
@@ -883,12 +962,78 @@ export default function ActuGroupScreen() {
   }, [group]);
 
   const groupTLDR = useMemo(() => buildGroupTLDR(group), [group]);
+
+  // ✅ loiIdRoutable = "vraie loi" (DLR/loi-...) ; loiIdCanonForScreen = canon utilisable pour fiche loi
   const loiIdRoutable = useMemo(() => findRoutableLoiId(group), [group]);
+  const loiIdCanonForScreen = useMemo(() => findLoiIdCanonForScreen(group), [group]);
 
   const loiHref = useMemo(() => {
-    if (!loiIdRoutable) return null;
-    return withFromKey(`/lois/${encodeURIComponent(loiIdRoutable)}`, groupKey);
-  }, [loiIdRoutable, groupKey]);
+    const target = loiIdRoutable || loiIdCanonForScreen;
+    if (!target) return null;
+    return withFromLabel(withFromKey(`/lois/${encodeURIComponent(target)}`, groupKey), header?.title);
+  }, [loiIdRoutable, loiIdCanonForScreen, groupKey, header?.title]);
+
+  const primaryScrutinNumero = useMemo(() => {
+    const items = ((group as any)?.items ?? []) as any[];
+    if (!items.length) return null;
+    for (const it of items) {
+      const n = extractScrutinNumero(it);
+      if (n && isDigits(n)) return n;
+    }
+    return null;
+  }, [group]);
+
+  const primaryProofHref = useMemo(() => {
+    // preuve principale = vote si existant, sinon loi
+    if (primaryScrutinNumero) {
+      return withFromLabel(withFromKey(`/scrutins/${encodeURIComponent(primaryScrutinNumero)}`, groupKey), header?.title);
+    }
+    if (loiHref) return loiHref;
+    return null;
+  }, [primaryScrutinNumero, groupKey, header?.title, loiHref]);
+
+  /**
+   * ✅ REDIRECT "loi-first"
+   * - si on a une fiche loi (loiIdRoutable OU loiIdCanonForScreen) => /lois/...
+   * - sinon, si entity=scrutin et scrutinNum => /scrutins/...
+   * - sinon rester sur group screen
+   */
+  useEffect(() => {
+    if (didRedirectRef.current) return;
+    if (loading || refreshing) return;
+    if (!groupKey) return;
+    if (!group) return;
+
+    // 1) loi-first
+    const targetLoi = loiIdRoutable || loiIdCanonForScreen;
+    if (targetLoi) {
+      didRedirectRef.current = true;
+      setRedirecting(true);
+      router.replace(withFromLabel(withFromKey(`/lois/${encodeURIComponent(targetLoi)}`, groupKey), header?.title) as any);
+      return;
+    }
+
+    // 2) fallback scrutin
+    const entity = cleanSpaces((group as any)?.entity);
+    if (entity === "scrutin" && primaryScrutinNumero) {
+      didRedirectRef.current = true;
+      setRedirecting(true);
+      router.push(
+        withFromLabel(withFromKey(`/scrutins/${encodeURIComponent(primaryScrutinNumero)}`, groupKey), header?.title) as any
+      );
+      return;
+    }
+  }, [
+    loading,
+    refreshing,
+    groupKey,
+    group,
+    loiIdRoutable,
+    loiIdCanonForScreen,
+    primaryScrutinNumero,
+    header?.title,
+    router,
+  ]);
 
   const mappedItems: ItemRow[] = useMemo(() => {
     if (!group?.items?.length) return [];
@@ -978,21 +1123,23 @@ export default function ActuGroupScreen() {
 
   const primaryVoteHref = useMemo(() => {
     if (!primaryVote?.href) return null;
-    return withFromKey(primaryVote.href, groupKey);
-  }, [primaryVote, groupKey]);
-
-  const primaryScrutinNumero = useMemo(() => {
-    if (!primaryVote?.raw) return null;
-    return extractScrutinNumero(primaryVote.raw as any);
-  }, [primaryVote]);
+    return withFromLabel(withFromKey(primaryVote.href, groupKey), header?.title);
+  }, [primaryVote, groupKey, header?.title]);
 
   const openHref = useCallback(
     (href?: string | null) => {
-      if (!href) return;
-      const finalHref = withFromKey(href, groupKey);
-      router.push(finalHref as any);
+      const h = cleanSpaces(href);
+      if (!h) return;
+
+      const finalHref = withFromLabel(withFromKey(h, groupKey), header?.title);
+
+      if (finalHref.startsWith("/")) {
+        router.push(finalHref as any);
+        return;
+      }
+      router.push(("/" + finalHref) as any);
     },
-    [router, groupKey]
+    [router, groupKey, header?.title]
   );
 
   const enClair = useMemo(() => {
@@ -1129,8 +1276,9 @@ export default function ActuGroupScreen() {
         </View>
       </View>
 
-      {/* ✅ Skeleton state */}
-      {loading ? (
+      {redirecting ? (
+        <GroupSkeleton />
+      ) : loading ? (
         <GroupSkeleton />
       ) : error ? (
         <View style={{ padding: 16, gap: 8 }}>
@@ -1237,13 +1385,23 @@ export default function ActuGroupScreen() {
                       />
                     </View>
                   ) : null}
+
+                  {!primaryVoteHref && primaryProofHref ? (
+                    <View style={{ marginTop: 10 }}>
+                      <CTAButton
+                        label="Voir la preuve principale"
+                        onPress={() => router.push(primaryProofHref as any)}
+                        iconLeft={<Ionicons name="shield-checkmark-outline" size={16} color={colors.text} />}
+                      />
+                    </View>
+                  ) : null}
                 </InfoBlock>
 
                 <ProofsAccordion
                   open={proofsOpen}
                   onToggle={() => setProofsOpen((v) => !v)}
                   groupKey={groupKey}
-                  loiId={cleanSpaces((group as any)?.loi_id) || cleanSpaces((group.items as any[])?.[0]?.loi_id) || null}
+                  loiId={loiIdRoutable || loiIdCanonForScreen}
                   primaryScrutinNumero={primaryScrutinNumero}
                 />
 

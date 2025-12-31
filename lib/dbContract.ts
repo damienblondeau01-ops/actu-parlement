@@ -19,6 +19,7 @@ export const DB_VIEWS = {
 
   // Scrutins
   SCRUTINS_PAR_LOI_APP: "scrutins_par_loi_app",
+  SCRUTINS_PAR_LOI_CANON_APP: "scrutins_par_loi_canon_app", // ✅ NEW
   SCRUTINS_DATA: "scrutins_data",
   SCRUTINS_LOI_ENRICHIS: "scrutins_loi_enrichis",
 

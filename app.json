@@ -5,12 +5,24 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "scheme": "actudeslois", // 👈 ajout important
+
+    "scheme": "actudeslois",
+
+    "android": {
+      "package": "com.anonymous.actuparlement",
+      "backgroundColor": "#F6F1E8"
+    },
+
+    "ios": {
+      "backgroundColor": "#F6F1E8"
+    },
+
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#F6F1E8"
     },
+
     "assetBundlePatterns": ["**/*"]
   }
 }

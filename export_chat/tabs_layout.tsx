@@ -3,7 +3,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 import React from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { theme } from "../../lib/theme";
+import { theme } from "@/lib/theme";
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();

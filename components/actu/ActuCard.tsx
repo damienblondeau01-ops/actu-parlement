@@ -8,6 +8,8 @@ import type { ActuItemUI, Tone } from "./types";
 
 const colors = theme.colors;
 
+type StatusKey = "adopted" | "rejected" | "pending";
+
 function Icon({
   lib,
   name,
@@ -65,6 +67,53 @@ function fmtDateFR(d: string) {
   }
 }
 
+function StatusBadge({ status, disabled }: { status: StatusKey; disabled?: boolean }) {
+  const s = String(status ?? "pending") as StatusKey;
+
+  const cfg =
+    s === "adopted"
+      ? {
+          label: "Adopté",
+          fg: "rgba(22,163,74,0.98)",
+          bg: "rgba(22,163,74,0.14)",
+          border: "rgba(22,163,74,0.22)",
+          icon: "checkmark-circle-outline" as const,
+        }
+      : s === "rejected"
+      ? {
+          label: "Rejeté",
+          fg: "rgba(220,38,38,0.98)",
+          bg: "rgba(220,38,38,0.14)",
+          border: "rgba(220,38,38,0.22)",
+          icon: "close-circle-outline" as const,
+        }
+      : {
+          label: "En cours",
+          fg: "rgba(217,119,6,0.98)",
+          bg: "rgba(217,119,6,0.14)",
+          border: "rgba(217,119,6,0.22)",
+          icon: "time-outline" as const,
+        };
+
+  return (
+    <View
+      style={[
+        styles.statusPill,
+        {
+          backgroundColor: cfg.bg,
+          borderColor: cfg.border,
+          opacity: disabled ? 0.65 : 1,
+        },
+      ]}
+    >
+      <Ionicons name={cfg.icon} size={13} color={cfg.fg} />
+      <Text style={[styles.statusText, { color: cfg.fg }]} numberOfLines={1}>
+        {cfg.label}
+      </Text>
+    </View>
+  );
+}
+
 export const ActuCard = memo(function ActuCard({
   item,
   onPress,
@@ -81,19 +130,22 @@ export const ActuCard = memo(function ActuCard({
 
   // ✅ badge "+N" = total réel - preview (et fallback sur logique simple si preview absent)
   const extraCount = useMemo(() => {
-    const total = Number(item.groupCount ?? 0);
-    const preview = Number(item.previewCount ?? 0);
+    const total = Number((item as any).groupCount ?? 0);
+    const preview = Number((item as any).previewCount ?? 0);
 
     if (total > 0 && preview > 0) {
       return Math.max(0, total - preview);
     }
 
     // fallback: ancien comportement (+N = groupCount-1)
-    const n = Number(item.groupCount ?? 0);
+    const n = Number((item as any).groupCount ?? 0);
     return n > 1 ? n - 1 : 0;
-  }, [item.groupCount, item.previewCount]);
+  }, [(item as any).groupCount, (item as any).previewCount]);
 
   const many = extraCount > 0;
+
+  const statusKey = String((item as any).statusKey ?? "") as StatusKey;
+  const showStatus = statusKey === "adopted" || statusKey === "rejected" || statusKey === "pending";
 
   return (
     <Pressable
@@ -121,14 +173,14 @@ export const ActuCard = memo(function ActuCard({
       <View style={styles.headerRow}>
         <View style={styles.leftRow}>
           <View style={[styles.iconChip, { borderColor: accent, opacity: disabled ? 0.6 : 1 }]}>
-            <Icon lib={item.iconLib} name={item.iconName} size={18} color={accent} />
+            <Icon lib={(item as any).iconLib} name={(item as any).iconName} size={18} color={accent} />
           </View>
 
           <View style={styles.pillsRow}>
-            {!!item.tag && (
+            {!!(item as any).tag && (
               <View style={styles.pill}>
                 <Text style={styles.pillText} numberOfLines={1}>
-                  {item.tag}
+                  {(item as any).tag}
                 </Text>
               </View>
             )}
@@ -144,21 +196,25 @@ export const ActuCard = memo(function ActuCard({
         </View>
 
         <View style={styles.datePill}>
-          <Text style={styles.dateText}>{fmtDateFR(item.dateISO)}</Text>
+          <Text style={styles.dateText}>{fmtDateFR((item as any).dateISO)}</Text>
         </View>
       </View>
 
       <Text style={[styles.title, disabled && { opacity: 0.7 }]} numberOfLines={2}>
-        {item.title}
+        {(item as any).title}
       </Text>
 
+      {/* ✅ "Type d'événement" */}
       <Text style={[styles.subtitle, disabled && { opacity: 0.7 }]} numberOfLines={2}>
-        {item.subtitle}
+        {(item as any).subtitle}
       </Text>
 
-      {!!item.why && (
+      {/* ✅ Nouveau: statut de l'événement (après le type) */}
+      {showStatus && <StatusBadge status={statusKey || "pending"} disabled={disabled} />}
+
+      {!!(item as any).why && (
         <Text style={[styles.why, disabled && { opacity: 0.65 }]} numberOfLines={2}>
-          {item.why}
+          {(item as any).why}
         </Text>
       )}
 
@@ -240,6 +296,20 @@ const styles = StyleSheet.create({
   title: { color: colors.text, fontSize: 15, fontWeight: "900", lineHeight: 20 },
   subtitle: { color: colors.subtext, fontSize: 12, lineHeight: 17, fontWeight: "700" },
   why: { marginTop: -2, color: "rgba(255,255,255,0.78)", fontSize: 12, lineHeight: 16, fontWeight: "800" },
+
+  // ✅ NEW: status badge
+  statusPill: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: -2,
+  },
+  statusText: { fontSize: 12, fontWeight: "900" },
 
   bottomRow: { marginTop: 2, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   cta: { color: colors.text, fontSize: 12, fontWeight: "900", flex: 1, minWidth: 0 },

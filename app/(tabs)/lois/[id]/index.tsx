@@ -1,1399 +1,1564 @@
 // app/(tabs)/lois/[id]/index.tsx
-import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+// ✅ SQUELETTE CANON v0.1 — “Bulletin (papier)”
+// Objectif: structure + règles d’affichage (pas de logique métier complexe)
+// ✅ Ici: on branche le MINIMUM fiable : Header + Timeline depuis DB (fetchLoiDetail / fetchLoiTimeline)
+// Le reste (TLDR IA / Votes / Measures / Sources riches) viendra ensuite.
+
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
 import {
-  ActivityIndicator,
-  Animated,
-  Easing,
   ScrollView,
   StyleSheet,
   Text,
   View,
   Pressable,
   LayoutChangeEvent,
+  Linking, // ✅ FIX: ouvrir les liens externes (https://...)
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { theme } from "../../../../lib/theme";
-
-import {
-  LoiAIIntroBlock,
-  LoiHero,
-  LoiTLDR,
-  LoiImpact,
-  LoiVoteResult,
-  LoiGroupVotes,
-  LoiTimeline,
-} from "../../../../components/loi/LoiBlocks";
-import type { LoiScreenModel } from "../../../../components/loi/LoiBlocks";
+import { useLocalSearchParams, useRouter } from "expo-router";
 
 import {
   fetchLoiDetail,
   fetchLoiTimeline,
-  fetchVotesGroupesByScrutin,
-  type VoteGroupePositionRow,
-  type LoiTimelineRow,
-  resolveGroupKeyFromAnyId,
+  fetchLoiTimelineCanon,
+  fetchLoiSources,
+  fetchLoiTexte,
+} from "../../../../lib/queries/lois";
+import type {
+  LoiTimelineRow,
+  LoiSourceItem,
+  LoiTexteRow,
 } from "../../../../lib/queries/lois";
 
-import { parseScrutinOutcome, outcomeToLabel } from "@/lib/parliament/scrutinResult";
+import { buildCanonHeader, fmtDateFR } from "@/lib/lois/canonAdapter";
+import { titleFromCanonKey } from "@/lib/lois/title";
+import { buildTLDRv0 } from "@/lib/lois/tldr";
+
+import LoiSourcesBlock from "@/components/loi/LoiSourcesBlock";
+
+import { generateEnClairV1 } from "@/lib/ai/enClair";
+import type { EnClairItem } from "@/lib/ai/types";
+
+// ✅ Votes (V0) — par scrutin / par groupes
 import {
-  pickReferenceScrutin as pickReferenceScrutinCanon,
-  referenceKindLabel,
-} from "@/lib/parliament/referenceScrutin";
+  fetchVotesGroupesForScrutins,
+  type VoteGroupeRow,
+} from "@/lib/queries/votes";
 
-import {
-  AmendementsHighlights,
-  type AmendementHighlight,
-} from "@/components/loi/AmendementsHighlights";
-import { fetchAmendementsByLoi, pickAmendementsHighlights } from "@/lib/queries/amendements";
+// ✅ regroupement canon (UI-only)
+import { groupTimelineByYear } from "@/lib/loi/timelineCanon";
 
-// ✅ Route unique (anti erreurs de navigation)
-import { routeFromItemId } from "@/lib/routes";
-
-// ✅ (optionnel) un seul log, après tous les imports
-console.log("[LOI FILE LOADED] app/(tabs)/lois/[id]/index.tsx");
-
-const colors = theme.colors;
-const BORDER = (colors as any)?.border ?? "rgba(255,255,255,0.10)";
+/** =========================
+ *  ✅ THÈME “PAPIER” (comme Actu)
+ *  ========================= */
+const PAPER = "#F6F1E8";
+const PAPER_CARD = "#FBF7F0";
+const INK = "#121417";
+const INK_SOFT = "rgba(18,20,23,0.72)";
+const LINE = "rgba(18,20,23,0.14)";
 
 type RouteParams = {
   id?: string;
+  canonKey?: string;
 
-  // ✅ contexte (optionnel) : pour une navigation “récit → preuve → retour”
+  // provenance
   fromKey?: string;
   fromLabel?: string;
-  anchor?: "timeline" | "vote" | "groups" | "amendements" | "impact";
+
+  // ✅ titre éditorial (citoyen) propagé depuis Actu
+  heroTitle?: string;
+
+  // ✅ fallback si DB vide
+  seedScrutin?: string;
+
+  // ✅ restore Actu
+  restoreId?: string;
+  restoreOffset?: string;
+
+  anchor?:
+    | "resume" // ✅ A1
+    | "tldr"
+    | "context"
+    | "impact"
+    | "timeline"
+    | "votes"
+    | "measures"
+    | "sources";
 };
 
-type LoiRow = {
-  loi_id: string;
-  titre_loi: string | null;
-  nb_scrutins_total: number | null;
-  nb_articles: number | null;
-  nb_amendements: number | null;
-  date_premier_scrutin: string | null;
-  date_dernier_scrutin: string | null;
-  legislature: number | null;
+/** =========================
+ *  ✅ RÉSUMÉ V0 (MANUEL) — A1
+ *  =========================
+ *  Règle: bloc statique, écrit à la main, uniquement pour la loi spéciale.
+ *  Objectif: tester la lisibilité citoyenne, avant automatisation IA.
+ */
+type ResumeV0 = {
+  title?: string;
+  sentences: string[];
+  note?: string;
 };
+function isLoiSpecialeKey(canonKey: string, id: string) {
+  const ck = String(canonKey ?? "").toLowerCase();
+  const _id = String(id ?? "").toLowerCase();
 
-type TimelineRow = LoiTimelineRow;
+  // ✅ déclencheurs robustes (canonKey "loi:..." ou slug "scrutin-public-...loi-speciale...")
+  if (ck.includes("loi-speciale")) return true;
+  if (_id.includes("loi-speciale")) return true;
 
-type VotesGroupeRow = {
-  // ✅ clé canon de navigation / filtrage
-  groupe_norm: string;
-
-  // UI (optionnel)
-  groupe_abrev: string | null;
-  groupe_nom: string | null;
-  groupe_label?: string | null;
-
-  // agrégats
-  nb_pour: number;
-  nb_contre: number;
-  nb_abstention: number;
-  nb_nv: number;
-};
-
-type VoteGroupePositionRowExt = VoteGroupePositionRow;
-
-// ----------------- Helpers -----------------
-
-function fmtDateFR(d?: string | null) {
-  if (!d) return "—";
-  try {
-    return new Date(d).toLocaleDateString("fr-FR");
-  } catch {
-    return "—";
-  }
-}
-
-function norm(s?: string | null) {
-  return String(s ?? "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function includesAny(hay: string, needles: string[]) {
-  return needles.some((n) => hay.includes(n));
-}
-
-// ✅ Détection robuste : kind + objet/titre (car kind peut être "autre")
-function isAmendementLikeRow(s: { kind?: string | null; objet?: string | null; titre?: string | null }) {
-  const k = (s.kind ?? "").toLowerCase().trim();
-  const text = `${s.objet ?? ""} ${s.titre ?? ""}`.toLowerCase();
-
-  // 1) via kind
-  if (k.includes("amend")) return true;
-  if (k.includes("sous") && k.includes("amend")) return true;
-
-  // 2) via texte (fallback ultra utile quand kind = "autre")
-  if (text.includes("amendement")) return true;
-  if (text.includes("sous-amendement") || text.includes("sous amendement")) return true;
+  // ✅ si jamais le canonKey est "loi:...article-45..." (loi spéciale art. 45)
+  if (ck.includes("article-45") && ck.includes("loi:")) return true;
+  if (_id.includes("article-45") && _id.includes("scrutin-public-")) return true;
 
   return false;
 }
 
-function isSousAmendementLikeRow(s: { objet?: string | null; titre?: string | null; kind?: string | null }) {
-  const k = (s.kind ?? "").toLowerCase();
-  const text = `${s.objet ?? ""} ${s.titre ?? ""}`.toLowerCase();
-  return (
-    (k.includes("sous") && k.includes("amend")) ||
-    text.includes("sous-amendement") ||
-    text.includes("sous amendement")
-  );
-}
+/** =========================
+ *  CANON MODEL (UI-only)
+ *  ========================= */
+type CanonProof = {
+  label: string;
+  href: string;
+};
 
-function pickTimelineTitleUX(s: TimelineRow, index: number) {
-  if (index === 0) return "Vote le plus récent";
-  if (index === 1) return "Vote clé";
-  if (isAmendementLikeRow(s)) return "Vote sur un amendement";
-  if ((s.kind ?? "").toLowerCase().trim() === "article") return "Vote sur une partie du texte";
-  return (s.titre ?? "").trim() || "Vote au Parlement";
-}
+type CanonTLDRBullet = {
+  text: string;
+  proof: CanonProof; // ✅ obligatoire
+};
 
-function shortContextFromScrutin(s: TimelineRow) {
-  const base =
-    (s.article_ref ? `Article ${s.article_ref}` : null) ??
-    (isAmendementLikeRow(s) ? "Amendement" : null) ??
-    null;
+type CanonHeader = {
+  title: string;
+  status:
+    | "Adoptée"
+    | "En cours"
+    | "Rejetée"
+    | "Retirée"
+    | "Promulguée"
+    | "—";
+  lastStepLabel: string;
+  lastStepDate: string;
+  oneLiner: string;
+};
 
-  const objet = (s.objet ?? "").trim();
-  if (base && objet) return `${base} — ${objet}`;
-  if (base) return base;
-  if (objet) return objet;
-  return "Vote au Parlement";
-}
+type CanonContext = {
+  problem: string;
+  sponsor: string;
+  audience: string;
+};
 
-function extractParentLawLabel(text: string) {
-  const t = (text ?? "").toLowerCase();
+type CanonImpactCard = {
+  title: string;
+  body: string;
+  proof?: CanonProof;
+};
 
-  // PLF / PLFSS (les plus fréquents)
-  const mPlf = t.match(/projet de loi de finances pour\s+\d{4}/i);
-  if (mPlf?.[0]) return mPlf[0];
+type CanonTimelineStep = {
+  label: string;
+  date?: string;
+  result?: string;
+  proofs?: CanonProof[];
+};
 
-  const mPlfss = t.match(/projet de loi de financement de la s[ée]curit[ée] sociale/i);
-  if (mPlfss?.[0]) return mPlfss[0];
-
-  // Générique : "projet/proposition de loi ..."
-  const mGen = t.match(/(projet|proposition) de loi[^.()]{10,120}/i);
-  if (mGen?.[0]) return mGen[0];
-
-  return null;
-}
-
-function smartDisplayTitleAndSubtitle(params: {
-  isScrutinBacked: boolean;
-  loiTitle: string;
-  timeline: TimelineRow[];
-}) {
-  const { isScrutinBacked, loiTitle, timeline } = params;
-  const baseTitle = (loiTitle ?? "").trim();
-
-  if (!isScrutinBacked) {
-    return { title: baseTitle, subtitle: "Comprendre l’essentiel en quelques secondes" };
-  }
-
-  const textAll =
-    `${baseTitle} ` + (timeline ?? []).map((x) => `${x.titre ?? ""} ${x.objet ?? ""}`).join(" ");
-
-  const parent = extractParentLawLabel(textAll);
-  const top = timeline?.[0] ?? null;
-
-  const looksAmend =
-    baseTitle.toLowerCase().includes("amendement") || (top ? isAmendementLikeRow(top) : false);
-
-  if (parent) {
-    const parentNice = parent.charAt(0).toUpperCase() + parent.slice(1);
-    if (looksAmend) {
-      const amendLabel = (top?.objet ?? "").trim() || (top?.titre ?? "").trim() || baseTitle;
-      return {
-        title: parentNice,
-        subtitle: `Vote sur amendement — ${amendLabel}`.slice(0, 110),
-      };
-    }
-    return {
-      title: parentNice,
-      subtitle: "Aperçu basé sur les scrutins visibles",
-    };
-  }
-
-  return {
-    title: looksAmend ? "Vote sur un amendement" : "Vote au Parlement",
-    subtitle: baseTitle ? baseTitle.slice(0, 110) : "Aperçu basé sur les scrutins visibles",
+type CanonVotes = {
+  global: {
+    pour: number;
+    contre: number;
+    abstention: number;
+    participation?: number;
   };
-}
+  byGroups: Array<{
+    groupLabel: string;
+    pour: number;
+    contre: number;
+    abstention: number;
+    positionMajoritaire: "POUR" | "CONTRE" | "ABSTENTION" | "DIVISÉ";
+  }>;
+};
 
-function statusFromResultOrVotes(resultat?: string | null, votes?: { pour: number; contre: number }) {
-  // ✅ 1) Texte résultat (source de vérité)
-  const labelFromText = outcomeToLabel(parseScrutinOutcome(resultat));
-  if (labelFromText) return labelFromText as "Adoptée" | "Rejetée";
+type CanonMeasures = {
+  articles?: Array<{ label: string; changes: string[]; proofs?: CanonProof[] }>;
+  amendmentsTop?: Array<{ label: string; why: string; proof: CanonProof }>;
+};
 
-  // ✅ 2) Fallback par les chiffres (quand texte absent/flou)
-  if (votes) {
-    if (votes.pour === 0 && votes.contre === 0) return "En cours" as const;
-    return votes.pour >= votes.contre ? ("Adoptée" as const) : ("Rejetée" as const);
-  }
+type CanonSources = {
+  updatedAt: string;
+  sources: Array<{ label: string; href: string }>;
+};
 
-  return "En cours" as const;
-}
+type CanonModel = {
+  header: CanonHeader;
+  tldr: CanonTLDRBullet[];
+  context?: CanonContext;
+  impact?: CanonImpactCard[];
+  timeline: CanonTimelineStep[];
+  votes?: CanonVotes;
+  measures?: CanonMeasures;
+  sources: CanonSources;
+};
 
-function stanceFromGroupRow(g: VotesGroupeRow): "POUR" | "CONTRE" | "DIVISÉ" {
-  const p = g.nb_pour ?? 0;
-  const c = g.nb_contre ?? 0;
-  const a = g.nb_abstention ?? 0;
-  const nv = g.nb_nv ?? 0;
-  const max = Math.max(p, c, a, nv);
-
-  if (max === 0) return "DIVISÉ";
-  if (p === max) return "POUR";
-  if (c === max) return "CONTRE";
-  return "DIVISÉ";
-}
-
-function normalizePosition(pos?: string | null): "pour" | "contre" | "abstention" | "nv" {
-  const x = (pos ?? "").toLowerCase().trim();
-  if (!x) return "nv";
-
-  if (x.includes("pour")) return "pour";
-  if (x.includes("contre")) return "contre";
-  if (x.includes("abst")) return "abstention";
-
-  if (x.includes("non") && x.includes("vot")) return "nv";
-  if (x.includes("non-vot")) return "nv";
-  if (x === "nv") return "nv";
-
-  return "nv";
-}
-
-function groupLabelForUI(g: {
-  groupe_abrev: string | null;
-  groupe_nom: string | null;
-  groupe_label?: string | null;
-}) {
-  const gl = (g.groupe_label ?? "").trim();
-  if (gl) return gl;
-
-  const abrev = (g.groupe_abrev ?? "").trim();
-  const nom = (g.groupe_nom ?? "").trim();
-  if (abrev && nom) return `${abrev} · ${nom}`;
-  return abrev || nom || "—";
-}
-
-function aggregateVotesGroupes(rows: VoteGroupePositionRowExt[]): VotesGroupeRow[] {
-  const map: Record<string, VotesGroupeRow> = {};
-
-  for (const r of rows ?? []) {
-    const gn = (r as any)?.groupe_norm ? String((r as any).groupe_norm).trim() : "";
-    if (!gn) continue;
-
-    const abrev = ((r as any)?.groupe_abrev ?? null) as string | null;
-    const nom = ((r as any)?.groupe_nom ?? null) as string | null;
-    const gl =
-      (((r as any)?.groupe_label ?? "") as string).trim() ||
-      (abrev ?? "").trim() ||
-      (nom ?? "").trim() ||
-      gn;
-
-    if (!map[gn]) {
-      map[gn] = {
-        groupe_norm: gn,
-        groupe_abrev: abrev,
-        groupe_nom: nom,
-        groupe_label: gl,
-        nb_pour: 0,
-        nb_contre: 0,
-        nb_abstention: 0,
-        nb_nv: 0,
-      };
-    }
-
-    const bucket = normalizePosition((r as any)?.position ?? null);
-    const n = Number((r as any)?.nb_voix ?? 0) || 0;
-
-    if (bucket === "pour") map[gn].nb_pour += n;
-    else if (bucket === "contre") map[gn].nb_contre += n;
-    else if (bucket === "abstention") map[gn].nb_abstention += n;
-    else map[gn].nb_nv += n;
-  }
-
-  return Object.values(map).sort((a, b) =>
-    groupLabelForUI(a).localeCompare(groupLabelForUI(b), "fr")
-  );
-}
-
-function buildEnClair(title: string, timeline: TimelineRow[], statusLabel: string) {
-  const objets = (timeline ?? [])
-    .map((s) => (s.objet ?? "").trim())
-    .filter(Boolean);
-
-  const line1 = `Cette loi porte sur : ${title.trim()}.`;
-  const line2 =
-    objets.length > 0
-      ? `Elle traite notamment de : ${objets[0]}${objets[1] ? `, ${objets[1]}` : ""}.`
-      : `Elle progresse par votes successifs au Parlement.`;
-  const line3 =
-    statusLabel === "Adoptée"
-      ? "Le scrutin de référence affiché montre qu’une majorité l’a soutenue."
-      : statusLabel === "Rejetée"
-      ? "Le scrutin de référence affiché montre qu’une majorité s’y est opposée."
-      : "Elle est encore en cours d’examen : les prochains votes peuvent faire basculer l’issue.";
-
-  return [line1, line2, line3].join("\n");
-}
-
-function buildPoliticalSummary(groups: { stance: "POUR" | "CONTRE" | "DIVISÉ" }[]) {
-  const pour = groups.filter((g) => g.stance === "POUR").length;
-  const contre = groups.filter((g) => g.stance === "CONTRE").length;
-  const div = groups.filter((g) => g.stance === "DIVISÉ").length;
-
-  if (pour === 0 && contre === 0 && div === 0) return "Positions des groupes indisponibles pour l’instant.";
-  if (pour > contre)
-    return "Une majorité de groupes politiques soutient le texte, mais cela ne préjuge pas du résultat final du vote.";
-  if (contre > pour)
-    return "Une majorité de groupes politiques s’oppose au texte, mais cela ne préjuge pas du résultat final du vote.";
-  return div > 0
-    ? "L’Assemblée est partagée : plusieurs groupes ont une position divisée."
-    : "Les positions des groupes sont très partagées.";
-}
-
-function FadeInUp({ children, delay = 0 }: { children: React.ReactNode; delay?: number }) {
-  const y = React.useRef(new Animated.Value(10)).current;
-  const o = React.useRef(new Animated.Value(0)).current;
-
-  React.useEffect(() => {
-    Animated.parallel([
-      Animated.timing(o, {
-        toValue: 1,
-        duration: 260,
-        delay,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(y, {
-        toValue: 0,
-        duration: 260,
-        delay,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [delay, o, y]);
-
-  return <Animated.View style={{ opacity: o, transform: [{ translateY: y }] }}>{children}</Animated.View>;
-}
-
-function SectionToggle({
+/** =========================
+ *  UI helpers
+ *  ========================= */
+function SectionTitle({
   title,
   subtitle,
-  open,
-  onToggle,
+  right,
 }: {
   title: string;
   subtitle?: string;
-  open: boolean;
-  onToggle: () => void;
+  right?: React.ReactNode;
 }) {
   return (
-    <Pressable onPress={onToggle} style={styles.toggleRow}>
+    <View style={styles.sectionHead}>
       <View style={{ flex: 1 }}>
-        <Text style={styles.toggleTitle}>{title}</Text>
-        {!!subtitle && <Text style={styles.toggleSub}>{subtitle}</Text>}
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {!!subtitle && <Text style={styles.sectionSub}>{subtitle}</Text>}
       </View>
-      <Text style={styles.toggleChevron}>{open ? "—" : "+"}</Text>
+      {right}
+    </View>
+  );
+}
+
+function ProofLink({
+  p,
+  onPress,
+}: {
+  p: CanonProof;
+  onPress: (href: string) => void;
+}) {
+  return (
+    <Pressable onPress={() => onPress(p.href)} style={styles.proofPill}>
+      <Text style={styles.proofText}>↳ {p.label}</Text>
     </Pressable>
   );
 }
 
-// ✅ Robustesse: mapping d’erreurs vers messages citoyens
-function userMessageFromError(err: any) {
-  const msg = String(err?.message ?? err ?? "").toLowerCase();
-  const code = String(err?.code ?? "");
-
-  if (code === "57014" || msg.includes("statement timeout") || msg.includes("canceling statement")) {
-    return "Le chargement prend trop de temps pour l’instant. Réessayez dans un moment.";
-  }
-
-  if (msg.includes("network") || msg.includes("failed to fetch") || msg.includes("fetch")) {
-    return "Impossible de charger cette loi (problème de connexion).";
-  }
-
-  return "Impossible de charger cette loi actuellement.";
-}
-
-function isNotFound(loiRow: any) {
-  if (!loiRow) return true;
-  if (typeof loiRow === "object" && Object.keys(loiRow).length === 0) return true;
-  return false;
-}
-
-// ----------------- Timeline “narrative” (featured) -----------------
-function normalizeResult(resultat?: string | null) {
-  const outcome = parseScrutinOutcome(resultat);
-  const label = outcomeToLabel(outcome);
-  if (!label) return null;
-  return { label, outcome };
-}
-
-function isStructuralLikeRow(s: {
-  kind?: string | null;
-  objet?: string | null;
-  titre?: string | null;
-  article_ref?: string | null;
+function Fold({
+  title,
+  subtitle,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
-  const k = (s.kind ?? "").toLowerCase();
-  const text = `${s.titre ?? ""} ${s.objet ?? ""} ${s.article_ref ?? ""}`.toLowerCase();
-  if (isAmendementLikeRow(s)) return false;
-  if (k.includes("article")) return true;
-
-  const needles = [
-    "l'ensemble",
-    "l’ensemble",
-    "texte",
-    "projet de loi",
-    "proposition de loi",
-    "article liminaire",
-    "première partie",
-    "premiere partie",
-    "1re partie",
-    "1ère partie",
-    "seconde partie",
-    "2e partie",
-    "deuxième partie",
-    "deuxieme partie",
-    "lecture définitive",
-    "lecture definitive",
-    "nouvelle lecture",
-    "commission mixte paritaire",
-    "cmp",
-    "seconde délibération",
-    "seconde deliberation",
-    "article unique",
-  ];
-
-  return needles.some((n) => text.includes(n));
-}
-
-function findDecisiveRow(timelineSortedDesc: TimelineRow[]) {
-  for (const s of timelineSortedDesc) {
-    const badge = normalizeResult(s.resultat);
-    if (badge?.label && isStructuralLikeRow(s)) return s;
-  }
-  for (const s of timelineSortedDesc) {
-    const badge = normalizeResult(s.resultat);
-    if (badge?.label) return s;
-  }
-  return null;
-}
-
-function pickFeaturedTimeline(timelineSortedDesc: TimelineRow[], max = 5) {
-  const out: TimelineRow[] = [];
-  const seen = new Set<string>();
-
-  const push = (s: TimelineRow | null | undefined) => {
-    if (!s?.numero_scrutin) return;
-    const key = String(s.numero_scrutin);
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(s);
-  };
-
-  push(timelineSortedDesc.find((s) => isStructuralLikeRow(s)) ?? null);
-  push(findDecisiveRow(timelineSortedDesc));
-
-  for (const s of timelineSortedDesc) {
-    if (out.length >= max) break;
-    if (!isStructuralLikeRow(s)) continue;
-    push(s);
-  }
-
-  for (const s of timelineSortedDesc) {
-    if (out.length >= max) break;
-    push(s);
-  }
-
-  return out;
-}
-
-function sumVotesFromGroups(groups: VotesGroupeRow[]) {
-  return (groups ?? []).reduce(
-    (acc, g) => {
-      acc.pour += g.nb_pour ?? 0;
-      acc.contre += g.nb_contre ?? 0;
-      acc.abstention += g.nb_abstention ?? 0;
-      acc.nv += g.nb_nv ?? 0;
-      return acc;
-    },
-    { pour: 0, contre: 0, abstention: 0, nv: 0 }
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <View style={styles.card}>
+      <Pressable onPress={() => setOpen((v) => !v)} style={styles.foldRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.foldTitle}>{title}</Text>
+          {!!subtitle && <Text style={styles.foldSub}>{subtitle}</Text>}
+        </View>
+        <Text style={styles.foldIcon}>{open ? "—" : "+"}</Text>
+      </Pressable>
+      {open ? <View style={{ paddingTop: 10 }}>{children}</View> : null}
+    </View>
   );
 }
 
-// ----------------- Périmètre du texte (micro-badges PRO) -----------------
-type ScopeBadge = { label: string; tone?: "success" | "warn" | "soft" };
+function toLoiSourcesUI(rows: any[]): LoiSourceItem[] {
+  return (Array.isArray(rows) ? rows : [])
+    .map((r) => {
+      // cas où c'est déjà au bon format UI
+      if (r && typeof r === "object" && "url" in r && "label" in r) {
+        return r as LoiSourceItem;
+      }
 
-function scopeBadgesFromContext(loiId: string, title: string, timeline: TimelineRow[]) {
-  const id = norm(loiId);
-  const t = norm(title);
-  const textAll = norm((timeline ?? []).map((x) => `${x.titre ?? ""} ${x.objet ?? ""}`).join(" "));
-
-  const badges: ScopeBadge[] = [];
-  const push = (b: ScopeBadge) => {
-    const key = (b.label || "").trim();
-    if (!key) return;
-    if (badges.some((x) => x.label === key)) return;
-    badges.push(b);
-  };
-
-  if (
-    id.includes("finances-pour") ||
-    t.includes("projet de loi de finances") ||
-    textAll.includes("projet de loi de finances")
-  ) {
-    push({ label: "PLF", tone: "soft" });
-  } else if (
-    id.includes("financement-de-la-securite-sociale") ||
-    t.includes("financement de la sécurité sociale") ||
-    t.includes("financement de la securite sociale") ||
-    textAll.includes("financement de la securite sociale") ||
-    textAll.includes("financement de la sécurité sociale")
-  ) {
-    push({ label: "PLFSS", tone: "soft" });
-  } else if (
-    id.includes("proposition-de-loi") ||
-    t.includes("proposition de loi") ||
-    textAll.includes("proposition de loi")
-  ) {
-    push({ label: "PPL", tone: "soft" });
-  } else if (
-    id.includes("projet-de-loi") ||
-    t.includes("projet de loi") ||
-    textAll.includes("projet de loi")
-  ) {
-    push({ label: "Projet", tone: "soft" });
-  }
-
-  if (
-    includesAny(id, ["lecture-definitive", "lecture-définitive"]) ||
-    t.includes("lecture définitive") ||
-    t.includes("lecture definitive") ||
-    textAll.includes("lecture definitive") ||
-    textAll.includes("lecture définitive")
-  ) {
-    push({ label: "Lecture définitive", tone: "warn" });
-  } else if (id.includes("nouvelle-lecture") || t.includes("nouvelle lecture") || textAll.includes("nouvelle lecture")) {
-    push({ label: "Nouvelle lecture", tone: "warn" });
-  } else if (
-    id.includes("premiere-lecture") ||
-    t.includes("première lecture") ||
-    t.includes("premiere lecture") ||
-    textAll.includes("première lecture") ||
-    textAll.includes("premiere lecture")
-  ) {
-    push({ label: "1ère lecture", tone: "soft" });
-  }
-
-  if (
-    includesAny(id, ["commission-mixte-paritaire", "-cmp-", " cmp"]) ||
-    t.includes("commission mixte paritaire") ||
-    textAll.includes("commission mixte paritaire")
-  ) {
-    push({ label: "CMP", tone: "warn" });
-  }
-
-  const hasEnsemble = textAll.includes("l'ensemble") || textAll.includes("l’ensemble");
-  const hasArticleUnique = textAll.includes("article unique");
-
-  const hasArticleLimin = id.includes("article-liminaire") || textAll.includes("article liminaire");
-  const hasPremPart =
-    id.includes("premiere-partie") || textAll.includes("première partie") || textAll.includes("premiere partie");
-  const hasSecPart =
-    id.includes("seconde-partie") ||
-    textAll.includes("seconde partie") ||
-    textAll.includes("deuxième partie") ||
-    textAll.includes("deuxieme partie");
-  const hasSecondeDelib =
-    includesAny(id, ["seconde-deliber", "seconde-délib"]) ||
-    textAll.includes("seconde délibération") ||
-    textAll.includes("seconde deliberation");
-
-  if (hasArticleLimin) push({ label: "Article liminaire", tone: "warn" });
-  if (hasPremPart) push({ label: "1ère partie", tone: "warn" });
-  if (hasSecPart) push({ label: "2e partie", tone: "warn" });
-  if (hasSecondeDelib) push({ label: "2e délibération", tone: "warn" });
-
-  if (hasEnsemble) push({ label: "Texte complet", tone: "success" });
-  else if (hasArticleUnique) push({ label: "Article unique", tone: "warn" });
-  else if (textAll.includes("l'article") || textAll.includes("l’article")) push({ label: "Article isolé", tone: "warn" });
-
-  const order = (lab: string) => {
-    const l = lab.toLowerCase();
-    if (l === "plf" || l === "plfss" || l === "ppl" || l === "projet") return 10;
-    if (l.includes("lecture")) return 20;
-    if (l === "cmp") return 25;
-    if (l.includes("texte complet")) return 30;
-    if (l.includes("article")) return 40;
-    if (l.includes("partie") || l.includes("délib")) return 50;
-    return 80;
-  };
-  badges.sort((a, b) => order(a.label) - order(b.label));
-  return badges;
+      // cas format DB (source_url/source_label/source_kind)
+      return {
+        kind: String((r as any)?.source_kind ?? (r as any)?.kind ?? "SOURCE"),
+        label: String((r as any)?.source_label ?? (r as any)?.label ?? "Source"),
+        url: String((r as any)?.source_url ?? (r as any)?.url ?? ""),
+        date: (r as any)?.source_date ?? null,
+      } as LoiSourceItem;
+    })
+    .filter((x) => !!x.url);
 }
 
-function toneStyles(tone?: "success" | "warn" | "soft") {
-  if (tone === "success") return [styles.scopePill, styles.scopePillSuccess];
-  if (tone === "warn") return [styles.scopePill, styles.scopePillWarn];
-  return [styles.scopePill, styles.scopePillSoft];
+/** =========================
+ *  ✅ Canon helper (copie légère depuis Actu)
+ *  - but: si l'écran reçoit un slug "scrutin-public-..." on reconstruit "loi:..."
+ *  ========================= */
+function cleanSpaces(s: string) {
+  return String(s ?? "").replace(/\s+/g, " ").trim();
+}
+function slugifyFR(input: string) {
+  return cleanSpaces(String(input ?? ""))
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/['’]/g, "-")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+function extractLawCoreFromSentence(sentence: string): string {
+  const s = cleanSpaces(String(sentence ?? ""));
+  if (!s) return "";
+
+  const noParen = s.replace(/\s*\([^)]*\)\s*$/g, "").trim();
+
+  let x = noParen.replace(/^l['’]?\s*/i, "l'");
+  x = x.replace(/^l['’]ensemble\s+du\s+/i, "");
+  x = x.replace(/^l['’]ensemble\s+de\s+la\s+/i, "");
+  x = x.replace(/^l['’]article\s+unique\s+du\s+/i, "");
+  x = x.replace(/^l['’]article\s+premier\s+du\s+/i, "");
+  x = x.replace(/^l['’]article\s+\w+\s+du\s+/i, "");
+  x = x.replace(/^l['’]amendement[^,]*\s+à\s+/i, "");
+  x = cleanSpaces(x);
+
+  const low = x.toLowerCase();
+  const idxPjl = low.indexOf("projet de loi");
+  const idxPpl = low.indexOf("proposition de loi");
+  const idx = idxPjl >= 0 ? idxPjl : idxPpl;
+  if (idx < 0) return "";
+
+  const core = x.slice(idx);
+  return cleanSpaces(core);
+}
+function canonFromSlug(loiIdRaw: string): string | null {
+  let s = String(loiIdRaw ?? "").trim();
+  if (!s) return null;
+
+  const low = s.toLowerCase();
+  if (low.includes("|")) return null;
+
+  if (low.startsWith("loi:")) {
+    const inner = s.slice(4).trim();
+    if (/\s/.test(inner) || /[()]/.test(inner)) {
+      const core = extractLawCoreFromSentence(inner);
+      const slug = core ? slugifyFR(core) : "";
+      if (
+        slug &&
+        (slug.includes("projet-de-loi") || slug.includes("proposition-de-loi"))
+      ) {
+        let out = slug
+          .replace(/-de-la-lo$/i, "-de-la-loi")
+          .replace(/-de-la-l$/i, "-de-la-loi")
+          .replace(/-de-la-$/i, "-de-la-loi");
+
+        out = out.replace(
+          /-de-la-loi-organique-du-1er-aout-2001-relative-aux-lois-de-finances.*$/i,
+          "-de-la-loi"
+        );
+
+        return `loi:${out}`;
+      }
+      return null;
+    }
+    return `loi:${inner}`;
+  }
+
+  if (low.startsWith("scrutin-public-")) {
+    let ss = low
+      .replace("scrutin-public-ordinaire-", "scrutin-public-")
+      .replace("scrutin-public-solennel-", "scrutin-public-")
+      .replace(/-de-la-lo$/i, "-de-la-loi")
+      .replace(/-de-la-l$/i, "-de-la-loi")
+      .replace(/-de-la-$/i, "-de-la-loi");
+
+    const idxPjl = ss.indexOf("projet-de-loi");
+    const idxPpl = ss.indexOf("proposition-de-loi");
+    const idx = idxPjl >= 0 ? idxPjl : idxPpl;
+
+    if (idx >= 0) {
+      const core = ss.slice(idx);
+      return core ? `loi:${core}` : null;
+    }
+    return null;
+  }
+
+  const isSlugLike = !/\s/.test(s) && /^[a-z0-9][a-z0-9\-_:]+$/i.test(s);
+  if (isSlugLike) {
+    const ss = low
+      .replace(/^loi:/i, "")
+      .replace("scrutin-public-ordinaire-", "scrutin-public-")
+      .replace("scrutin-public-solennel-", "scrutin-public-")
+      .replace(/-de-la-lo$/i, "-de-la-loi")
+      .replace(/-de-la-l$/i, "-de-la-loi")
+      .replace(/-de-la-$/i, "-de-la-loi");
+
+    const idxPjl = ss.indexOf("projet-de-loi");
+    const idxPpl = ss.indexOf("proposition-de-loi");
+    const idx = idxPjl >= 0 ? idxPjl : idxPpl;
+
+    if (idx >= 0) {
+      const core = ss.slice(idx);
+      return core ? `loi:${core}` : null;
+    }
+    return null;
+  }
+
+  const core = extractLawCoreFromSentence(s);
+  if (core) {
+    const slug = slugifyFR(core);
+
+    let out = slug
+      .replace(/-de-la-lo$/i, "-de-la-loi")
+      .replace(/-de-la-l$/i, "-de-la-loi")
+      .replace(/-de-la-$/i, "-de-la-loi");
+
+    out = out.replace(
+      /-de-la-loi-organique-du-1er-aout-2001-relative-aux-lois-de-finances.*$/i,
+      "-de-la-loi"
+    );
+
+    if (out.includes("projet-de-loi") || out.includes("proposition-de-loi")) {
+      return `loi:${out}`;
+    }
+  }
+
+  return null;
 }
 
-function toneTextStyles(tone?: "success" | "warn" | "soft") {
-  if (tone === "success") return [styles.scopePillText, styles.scopePillTextSuccess];
-  if (tone === "warn") return [styles.scopePillText, styles.scopePillTextWarn];
-  return [styles.scopePillText, styles.scopePillTextSoft];
-}
-
-// ----------------- Screen -----------------
-export default function LoiDetailScreen() {
+/** =========================
+ *  Screen
+ *  ========================= */
+export default function LoiDetailCanonScreen() {
   const router = useRouter();
-  const scrollRef = React.useRef<ScrollView>(null);
-
-  // ✅ Normalisation robuste du param id (string | string[] | undefined)
   const params = useLocalSearchParams<RouteParams>();
-  const rawId = (params as any)?.id;
-  const idStr = useMemo(() => {
-    if (typeof rawId === "string") return rawId;
-    if (Array.isArray(rawId)) return String(rawId[0] ?? "");
+  const scrollRef = useRef<ScrollView>(null);
+
+  const id = useMemo(() => {
+    const raw = (params as any)?.id;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return String(raw[0] ?? "");
     return "";
-  }, [rawId]);
+  }, [params]);
 
-  const fromKey = useMemo(() => String((params as any)?.fromKey ?? "").trim() || null, [params]);
-  const fromLabel = useMemo(() => String((params as any)?.fromLabel ?? "").trim() || null, [params]);
-  const anchor = useMemo(() => String((params as any)?.anchor ?? "").trim() || null, [params]);
+  const canonKey = useMemo(() => {
+    const v = (params as any)?.canonKey;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
 
-  console.log("[LOI SCREEN] id param =", idStr);
+  // ✅ LOCK heroTitle au mount (ne doit jamais être écrasé)
+  const pHeroTitle = String((params as any)?.heroTitle ?? "").trim();
+  const pFromLabel = String((params as any)?.fromLabel ?? "").trim();
+  const lockedHeroTitleRef = useRef<string>("");
+  if (!lockedHeroTitleRef.current) {
+    lockedHeroTitleRef.current = pHeroTitle || pFromLabel || "";
+  }
+  const lockedHeroTitle = lockedHeroTitleRef.current;
 
-  // ✅ AIRBAG NAV: si on arrive ici avec un "scrutin-*", on redirige direct vers fiche Scrutin
-  const isScrutinId = useMemo(() => idStr.startsWith("scrutin-"), [idStr]);
+  /**
+   * ✅ LOI KEY (ultra robuste)
+   * - priorité canonKey si "loi:..."
+   * - sinon si id ressemble à un slug "scrutin-public-..." -> canonFromSlug -> "loi:..."
+   * - sinon id
+   */
+  const loiKey = useMemo(() => {
+    const ck = String((params as any)?.canonKey ?? "").trim();
+    if (ck && ck.startsWith("loi:")) return ck;
 
-  useEffect(() => {
-    if (!isScrutinId) return;
-    router.replace(routeFromItemId(idStr) as any);
-  }, [idStr, isScrutinId, router]);
+    const rawId = String(id ?? "").trim();
+    const maybeCanon = canonFromSlug(rawId);
+    if (maybeCanon && maybeCanon.startsWith("loi:")) return maybeCanon;
 
-  const [loi, setLoi] = useState<LoiRow | null>(null);
-  const [timeline, setTimeline] = useState<TimelineRow[]>([]);
-  const [groupVotes, setGroupVotes] = useState<VotesGroupeRow[]>([]);
+    return rawId;
+  }, [params, id]);
+
+  /**
+   * ✅ RESTORE TIMELINE QUERY KEY (anti-casse)
+   * - si on a un slug "scrutin-..." -> on l'utilise (source "scrutins_data", nickel)
+   * - sinon fallback canonKey "loi:..." (fetchLoiTimeline résout / ou canon tente d’abord)
+   */
+  const timelineQueryKey = useMemo(() => {
+    if (id?.startsWith("scrutin-")) return id;
+    const ck = String((params as any)?.canonKey ?? "").trim();
+    if (ck) return ck;
+    return "";
+  }, [id, params]);
+
+  const fromKey = useMemo(() => {
+    const v = (params as any)?.fromKey;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
+
+  const fromLabel = useMemo(() => {
+    const v = (params as any)?.fromLabel;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
+
+  const seedScrutin = useMemo(() => {
+    const v = (params as any)?.seedScrutin;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
+
+  const restoreId = useMemo(() => {
+    const v = (params as any)?.restoreId;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
+
+  const restoreOffset = useMemo(() => {
+    const v = (params as any)?.restoreOffset;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
+
+  const initialAnchor = useMemo(() => {
+    const v = (params as any)?.anchor;
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
+
+  // ✅ Titre humain depuis canonKey/slug — fallback si DB n’a pas de titre
+  const titleFromId = useMemo(
+    () => titleFromCanonKey(canonKey || id),
+    [canonKey, id]
+  );
+
+  // ✅ Retour intelligent : si on vient d'Actu => on revient sur Actu en restaurant l’item, sinon back normal
+  const goBackSmart = () => {
+    if (fromKey === "actu") {
+      router.replace({
+        pathname: "/actu",
+        params: {
+          restoreId: restoreId || undefined,
+          restoreOffset: restoreOffset || undefined,
+          restoreTs: String(Date.now()),
+        },
+      } as any);
+      return;
+    }
+    router.back();
+  };
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
 
-  const [amendHighlights, setAmendHighlights] = useState<AmendementHighlight[]>([]);
-  const [amendTotal, setAmendTotal] = useState<number>(0);
+  const [loiTitle, setLoiTitle] = useState<string | null>(null);
+  const [timelineRows, setTimelineRows] = useState<LoiTimelineRow[]>([]);
 
-  const [showTLDR, setShowTLDR] = useState(false);
-  const [showPolitical, setShowPolitical] = useState(false);
-  const [showAmendements, setShowAmendements] = useState(false);
-  const [showImpact, setShowImpact] = useState(false);
+  // ✅ DB-first: sources + texte + IA “En clair”
+  const [sources, setSources] = useState<LoiSourceItem[]>([]);
+  const [loiTexte, setLoiTexte] = useState<LoiTexteRow | null>(null);
+  const [enClair, setEnClair] = useState<EnClairItem[]>([]);
 
-  const [referenceScrutinId, setReferenceScrutinId] = useState<string | null>(null);
-  const [referenceKind, setReferenceKind] = useState<string | null>(null);
+  // ✅ Votes (V0): par scrutin -> par groupes
+  const [votesByScrutin, setVotesByScrutin] = useState<
+    Record<string, VoteGroupeRow[]>
+  >({});
 
-  const loiId = useMemo(() => (idStr ? String(idStr) : null), [idStr]);
-
-  const isScrutinBacked = useMemo(() => {
-    const x = (loiId ?? "").toLowerCase();
-    return x.startsWith("scrutin-") || x.includes("scrutin");
-  }, [loiId]);
-
-  // ✅ Anchors (scroll to section)
+  // ✅ anchors (canonical)
   const [anchorY, setAnchorY] = useState<Record<string, number>>({});
-  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
-
   const setAnchor = (key: string) => (e: LayoutChangeEvent) => {
     const y = e?.nativeEvent?.layout?.y ?? 0;
     setAnchorY((m) => ({ ...m, [key]: y }));
   };
 
-  const scrollToAnchor = (key: string) => {
-    const y = anchorY[key];
-    if (typeof y !== "number") return;
-    scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
-  };
+  const scrollToAnchor = useCallback(
+    (key: string) => {
+      const y = anchorY[key];
+      if (typeof y !== "number") return;
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 10), animated: true });
+    },
+    [anchorY]
+  );
 
-  useEffect(() => {
-    if (!anchor) return;
-    if (typeof anchorY[anchor] !== "number") {
-      setPendingAnchor(anchor);
-      return;
-    }
-    scrollToAnchor(anchor);
-    setPendingAnchor(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchor, anchorY]);
+  // ✅ navigation “preuve”
+  const openHref = useCallback(
+    async (href: string) => {
+      const h = String(href ?? "").trim();
+      if (!h) return;
 
-  useEffect(() => {
-    if (!pendingAnchor) return;
-    if (typeof anchorY[pendingAnchor] === "number") {
-      scrollToAnchor(pendingAnchor);
-      setPendingAnchor(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAnchor, anchorY]);
-
-  const runLoad = React.useCallback(async () => {
-    if (!loiId) {
-      setNotFound(true);
-      setError("Cette loi n’est pas disponible.");
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setNotFound(false);
-
-    try {
-      console.log("[LOI LOAD] start", { loiId });
-
-      const loiRow = (await fetchLoiDetail(loiId)) as unknown as LoiRow;
-      console.log("[LOI LOAD] detail ok", { loi_id: (loiRow as any)?.loi_id });
-
-      if (isNotFound(loiRow)) {
-        setLoi(null);
-        setTimeline([]);
-        setGroupVotes([]);
-        setReferenceScrutinId(null);
-        setReferenceKind(null);
-        setNotFound(true);
-        setError("Cette loi n’est pas disponible.");
+      // ✅ EXTERNE: http(s), mailto, tel
+      if (/^(https?:\/\/|mailto:|tel:)/i.test(h)) {
+        try {
+          const ok = await Linking.canOpenURL(h);
+          if (ok) await Linking.openURL(h);
+          else console.log("[OPENHREF] cannot open url:", h);
+        } catch (e) {
+          console.log(
+            "[OPENHREF] open external error =",
+            (e as any)?.message ?? e
+          );
+        }
         return;
       }
 
-      setLoi(loiRow ?? null);
-
-      // ✅ TIMELINE : clé robuste (loi_id canon OU group_key résolu)
-      const rawKey = String((loiRow as any)?.loi_id ?? loiId).trim();
-      let timelineKey = rawKey;
-
-      // si on est sur un agrégateur "scrutin-*", la timeline est indexée par group_key
-      if (timelineKey.startsWith("scrutin-")) {
-        try {
-          const gk = await resolveGroupKeyFromAnyId(timelineKey);
-          if (gk) timelineKey = gk;
-        } catch (e) {
-          console.warn("[LOI LOAD] timelineKey resolveGroupKey error", e);
-        }
+      // ✅ INTERNE: routes app
+      if (h.startsWith("/")) {
+        router.push(h as any);
+        return;
       }
 
-      const tl = (await fetchLoiTimeline(timelineKey, 250)) as unknown as TimelineRow[];
-      const tlSafe = Array.isArray(tl) ? tl : [];
-      const tlSorted = [...tlSafe].sort((a, b) => {
-        const da = a.date_scrutin ? new Date(a.date_scrutin).getTime() : 0;
-        const db = b.date_scrutin ? new Date(b.date_scrutin).getTime() : 0;
-        return db - da;
-      });
-
-      setTimeline(tlSorted);
-
-      // ✅ Scrutin de référence canonique (sur tlSorted)
-      const pick = pickReferenceScrutinCanon(tlSorted as any);
-      const numero = pick?.numero_scrutin ? String(pick.numero_scrutin) : null;
-
-      setReferenceScrutinId(numero);
-      setReferenceKind(pick?.kind ?? null);
-
-      console.log("[LOI LOAD] reference pick", { numero, kind: pick?.kind, reason: pick?.reason });
-    } catch (e: any) {
-      console.warn("[LOI DETAIL] load error:", e);
-      setLoi(null);
-      setTimeline([]);
-      setGroupVotes([]);
-      setReferenceScrutinId(null);
-      setReferenceKind(null);
-      setError(userMessageFromError(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [loiId]);
+      // ✅ fallback interne (ancien comportement) : on force un path
+      router.push(("/" + h.replace(/^\/+/, "")) as any);
+    },
+    [router]
+  );
 
   useEffect(() => {
-    // ✅ si c’est un scrutin-* on redirige, donc on ne charge pas cette page
-    if (!loiId) return;
-    if (isScrutinId) return;
-    runLoad();
-  }, [loiId, runLoad, isScrutinId]);
+    console.log("[LOI PARAMS]", {
+      id,
+      canonKey,
+      heroTitle: lockedHeroTitle, // ✅ lock visible en debug
+      seedScrutin,
+      fromKey,
+      fromLabel,
+      loiKey,
+      timelineQueryKey,
+    });
+  }, [
+    id,
+    canonKey,
+    lockedHeroTitle,
+    seedScrutin,
+    fromKey,
+    fromLabel,
+    loiKey,
+    timelineQueryKey,
+  ]);
 
+  /**
+   * ✅ RESET propre sur changement d'ID (évite “flash”)
+   */
+  useLayoutEffect(() => {
+    setError(null);
+    setLoiTitle(null);
+    setTimelineRows([]);
+    setLoading(!!id);
+    // ✅ reset DB-first
+    setSources([]);
+    setLoiTexte(null);
+    setEnClair([]);
+    setVotesByScrutin({});
+  }, [id]);
+
+  // ✅ Load minimal: title + timeline
   useEffect(() => {
     let alive = true;
 
     (async () => {
       try {
-        if (!loiId) return;
-        const rows = (await fetchAmendementsByLoi(String(loiId))) ?? [];
-        if (!alive) return;
+        setError(null);
 
-        setAmendTotal(rows.length);
-        setAmendHighlights(pickAmendementsHighlights(rows, 6));
-      } catch (e) {
-        console.warn("[LOI AMENDEMENTS] error:", e);
+        if (!id) {
+          setLoiTitle(null);
+          setTimelineRows([]);
+          setError("Identifiant loi manquant.");
+          setLoading(false);
+          return;
+        }
+
+        const loi = await fetchLoiDetail(loiKey);
+
+        const dbTitle = ((loi as any)?.titre_loi ?? null) as string | null;
+        const computedTitle =
+          (dbTitle && String(dbTitle).trim()) ||
+          titleFromCanonKey((loi as any)?.loi_id_canon ?? canonKey ?? id) ||
+          titleFromId ||
+          null;
+
+        /**
+         * ✅ TIMELINE (ANTI-CASSE)
+         * 1) Tente CANON si canonKey "loi:..."
+         * 2) Si vide -> fallback legacy (celle qui marchait) avec timelineQueryKey
+         */
+        let tl: any[] = [];
+
+        if (canonKey && canonKey.startsWith("loi:")) {
+          try {
+            tl = await fetchLoiTimelineCanon(canonKey, 500);
+            console.log(
+              "[LOI TIMELINE] canon =",
+              canonKey,
+              "| got =",
+              Array.isArray(tl) ? tl.length : 0
+            );
+          } catch (e) {
+            console.log(
+              "[LOI TIMELINE] canon error =",
+              (e as any)?.message ?? e
+            );
+            tl = [];
+          }
+        }
+
+        // ✅ fallback si canon vide OU pas de canonKey
+        if ((!Array.isArray(tl) || tl.length === 0) && timelineQueryKey) {
+          tl = await fetchLoiTimeline(timelineQueryKey, 500);
+          console.log(
+            "[LOI TIMELINE] fallback =",
+            timelineQueryKey,
+            "| got =",
+            Array.isArray(tl) ? tl.length : 0
+          );
+        }
+
+        const rows = Array.isArray(tl) ? ((tl as any) as LoiTimelineRow[]) : [];
+
+        // ✅ Tri robuste : date DESC puis numero DESC
+        rows.sort((a, b) => {
+          const da = a?.date_scrutin ? Date.parse(String(a.date_scrutin)) : 0;
+          const db = b?.date_scrutin ? Date.parse(String(b.date_scrutin)) : 0;
+
+          const A = Number.isFinite(da) ? da : 0;
+          const B = Number.isFinite(db) ? db : 0;
+
+          if (B !== A) return B - A;
+
+          const na =
+            Number(String(a?.numero_scrutin ?? "").replace(/\D+/g, "")) || 0;
+          const nb =
+            Number(String(b?.numero_scrutin ?? "").replace(/\D+/g, "")) || 0;
+          return nb - na;
+        });
+
         if (!alive) return;
-        setAmendTotal(0);
-        setAmendHighlights([]);
+        setLoiTitle(computedTitle);
+        setTimelineRows(rows);
+
+        console.log("[LOI SCREEN] id =", id);
+        console.log("[LOI SCREEN] loiKey =", loiKey);
+        console.log("[LOI SCREEN] timelineQueryKey =", timelineQueryKey);
+        console.log("[LOI SCREEN] timeline count =", rows.length);
+        console.log("[LOI SCREEN] sample row =", rows[0]);
+      } catch (e) {
+        if (!alive) return;
+        setLoiTitle(null);
+        setTimelineRows([]);
+        setError("Impossible de charger cette loi.");
+        console.log("[LOI ERROR]", (e as any)?.message ?? e);
+      } finally {
+        if (!alive) return;
+        setLoading(false);
       }
     })();
 
     return () => {
       alive = false;
     };
-  }, [loiId]);
+  }, [id, loiKey, timelineQueryKey, titleFromId, canonKey]);
 
-  // ✅ Charge les votes groupes UNIQUEMENT quand referenceScrutinId est prêt
+  // ✅ Load votes (V0) depuis les scrutins du parcours
   useEffect(() => {
-    let cancelled = false;
+    let alive = true;
 
     (async () => {
-      if (!referenceScrutinId) {
-        setGroupVotes([]);
-        return;
-      }
-
       try {
-        const rows = (await fetchVotesGroupesByScrutin(referenceScrutinId)) as VoteGroupePositionRowExt[];
-        if (cancelled) return;
-        setGroupVotes(aggregateVotesGroupes(rows));
+        const ids = Array.from(
+          new Set(
+            (timelineRows ?? [])
+              .map((r) => String((r as any)?.numero_scrutin ?? "").trim())
+              .filter(Boolean)
+          )
+        );
+
+        if (ids.length === 0) {
+          if (!alive) return;
+          setVotesByScrutin({});
+          return;
+        }
+
+        // ✅ V0 perf: on limite (les plus récents -> timelineRows déjà triée DESC)
+        const idsTop = ids.slice(0, 8);
+
+        const rows = await fetchVotesGroupesForScrutins(idsTop);
+
+        if (!alive) return;
+
+        const grouped: Record<string, VoteGroupeRow[]> = {};
+        for (const r of rows ?? []) {
+          const k = String((r as any)?.numero_scrutin ?? "").trim();
+          if (!k) continue;
+          if (!grouped[k]) grouped[k] = [];
+          grouped[k].push(r);
+        }
+
+        // tri interne: groupes “plus gros” d’abord (proxy: total)
+        Object.keys(grouped).forEach((k) => {
+          grouped[k].sort((a, b) => {
+            const ta = (a.pour ?? 0) + (a.contre ?? 0) + (a.abstention ?? 0);
+            const tb = (b.pour ?? 0) + (b.contre ?? 0) + (b.abstention ?? 0);
+            return tb - ta;
+          });
+        });
+
+        setVotesByScrutin(grouped);
       } catch (e) {
-        console.warn("[LOI GROUP VOTES] error:", e);
-        if (cancelled) return;
-        setGroupVotes([]);
+        if (!alive) return;
+        console.log("[LOI VOTES] error =", (e as any)?.message ?? e);
+        setVotesByScrutin({});
       }
     })();
 
     return () => {
-      cancelled = true;
+      alive = false;
     };
-  }, [referenceScrutinId]);
+  }, [timelineRows]);
 
-  const referenceScrutin = useMemo(() => {
-    if (!referenceScrutinId) return null;
-    return timeline.find((r) => String(r.numero_scrutin) === String(referenceScrutinId)) ?? null;
-  }, [timeline, referenceScrutinId]);
+  // ✅ Load DB-first: sources + texte (isolé, zéro impact timeline)
+  useEffect(() => {
+    let alive = true;
 
-  const refKindUX = useMemo(() => {
-    if (!referenceKind) return null;
-    try {
-      return referenceKindLabel(referenceKind as any);
-    } catch {
-      return null;
-    }
-  }, [referenceKind]);
+    (async () => {
+      if (!id) {
+        if (!alive) return;
+        setSources([]);
+        setLoiTexte(null);
+        return;
+      }
 
-  const groupRoutingIndex = useMemo(() => {
-    const map: Record<string, { groupe_norm: string; groupe_label: string }> = {};
+      // ✅ on essaie d’abord avec loiKey (canonKey si dispo), sinon id
+      const keyPrimary = String(loiKey ?? "").trim() || String(id).trim();
+      const keyFallback = String(id).trim();
 
-    for (const g of groupVotes ?? []) {
-      const gn = (g.groupe_norm ?? "").trim();
-      if (!gn) continue;
+      try {
+        const s1 = await fetchLoiSources(keyPrimary);
+        const s = (s1?.length ? s1 : await fetchLoiSources(keyFallback)) as any[];
+        if (!alive) return;
+        // ✅ important: on garde en state le format LoiSourceItem (UI)
+        setSources(toLoiSourcesUI(s) ?? []);
+      } catch (e) {
+        if (!alive) return;
+        console.log("[LOI SOURCES] error =", (e as any)?.message ?? e);
+        setSources([]);
+      }
 
-      const gl = groupLabelForUI(g).trim() || gn;
-      const abrev = (g.groupe_abrev ?? "").trim();
-      const nom = (g.groupe_nom ?? "").trim();
+      try {
+        const t1 = await fetchLoiTexte(keyPrimary);
+        const t = (t1 ? t1 : await fetchLoiTexte(keyFallback)) as
+          | LoiTexteRow
+          | null;
+        if (!alive) return;
+        setLoiTexte(t ?? null);
+      } catch (e) {
+        if (!alive) return;
+        console.log("[LOI TEXTE] error =", (e as any)?.message ?? e);
+        setLoiTexte(null);
+      }
+    })();
 
-      map[gn] = { groupe_norm: gn, groupe_label: gl };
-      map[gl] = { groupe_norm: gn, groupe_label: gl };
-      if (abrev) map[abrev] = { groupe_norm: gn, groupe_label: gl };
-      if (nom) map[nom] = { groupe_norm: gn, groupe_label: gl };
-    }
-
-    return map;
-  }, [groupVotes]);
-
-  const amendementsDetectedCount = useMemo(() => {
-    return (timeline ?? []).filter((s) => isAmendementLikeRow(s)).length;
-  }, [timeline]);
-
-  const amendementsTotalFromDB = useMemo(() => {
-    return loi?.nb_amendements != null ? Number(loi.nb_amendements) : null;
-  }, [loi?.nb_amendements]);
-
-  const amendementsCount = useMemo(() => {
-    if (amendementsTotalFromDB != null && amendementsTotalFromDB > 0) return amendementsTotalFromDB;
-    return amendementsDetectedCount;
-  }, [amendementsTotalFromDB, amendementsDetectedCount]);
-
-  const amendementsUI = useMemo(() => {
-    return (timeline ?? [])
-      .filter((s) => isAmendementLikeRow(s))
-      .slice(0, 8)
-      .map((s) => ({
-        date: fmtDateFR(s.date_scrutin),
-        title: (s.objet ?? "").trim() || (s.titre ?? "").trim() || "Amendement",
-        description: s.article_ref ? `Article ${s.article_ref}` : "Détail",
-        scrutinId: s.numero_scrutin ? String(s.numero_scrutin) : null,
-      }));
-  }, [timeline]);
-
-  const model: LoiScreenModel | null = useMemo(() => {
-    if (!loiId || !loi) return null;
-
-    const baseTitle = (loi.titre_loi ?? "").trim() || `Loi ${String(loiId)}`;
-
-    const voteTotals = sumVotesFromGroups(groupVotes);
-
-    const hasTotals =
-      (voteTotals.pour ?? 0) + (voteTotals.contre ?? 0) + (voteTotals.abstention ?? 0) > 0;
-
-    const hasResultText = !!(referenceScrutin?.resultat ?? "").trim();
-
-    const statusLabel = hasResultText
-      ? statusFromResultOrVotes(referenceScrutin?.resultat ?? null)
-      : hasTotals
-      ? statusFromResultOrVotes(null, { pour: voteTotals.pour, contre: voteTotals.contre })
-      : ("En cours" as const);
-
-    const { title, subtitle } = smartDisplayTitleAndSubtitle({
-      isScrutinBacked,
-      loiTitle: baseTitle,
-      timeline: timeline ?? [],
-    });
-
-    const timelineCitizen = (timeline ?? []).filter((s) => !isAmendementLikeRow(s));
-
-    const aiIntro = {
-      title: "En clair",
-      summary: buildEnClair(title, timelineCitizen, statusLabel),
+    return () => {
+      alive = false;
     };
+  }, [id, loiKey]);
 
-    const nbArticleApercu = (timeline ?? []).filter(
-      (s) => String(s.kind ?? "").toLowerCase().trim() === "article"
-    ).length;
+  // ✅ IA “En clair” V1 (preuves obligatoires : sources)
+  useEffect(() => {
+    let alive = true;
 
-    const nbSousAmendementApercu = (timeline ?? []).filter((s) => isSousAmendementLikeRow(s)).length;
+    (async () => {
+      try {
+        if (!id) {
+          if (!alive) return;
+          setEnClair([]);
+          return;
+        }
 
-    const nbAmendementApercu = amendementsDetectedCount;
+        const items = await generateEnClairV1({
+          loiId: String(id),
+          texteIntegralClean: loiTexte?.texte_integral_clean ?? null,
+          exposeMotifsText: null, // ⚠️ on ne l’a pas encore en texte, donc null (safe)
+          sources: sources ?? [],
+        });
 
-    const nbAutresApercu = Math.max(
-      0,
-      (timeline?.length ?? 0) - (nbArticleApercu + nbAmendementApercu + nbSousAmendementApercu)
-    );
+        if (!alive) return;
+        setEnClair(items ?? []);
+      } catch (e) {
+        if (!alive) return;
+        console.log("[EN CLAIR] error =", (e as any)?.message ?? e);
+        setEnClair([]);
+      }
+    })();
 
-    const nbArticleTotal = isScrutinBacked
-      ? nbArticleApercu
-      : loi.nb_articles != null
-      ? Number(loi.nb_articles)
-      : nbArticleApercu;
+    return () => {
+      alive = false;
+    };
+  }, [id, loiTexte, sources]);
 
-    const nbAmendementTotal = isScrutinBacked
-      ? nbAmendementApercu
-      : loi.nb_amendements != null
-      ? Number(loi.nb_amendements)
-      : nbAmendementApercu;
+  /** =========================
+   *  ✅ A1 — Résumé V0 MANUEL (uniquement loi spéciale)
+   *  ========================= */
+  const resumeV0: ResumeV0 | null = useMemo(() => {
+    if (!id) return null;
 
-    const nbSousAmendementTotal = nbSousAmendementApercu;
-
-    const nbAutresTotal = isScrutinBacked
-      ? nbAutresApercu
-      : Math.max(
-          0,
-          Number(loi.nb_scrutins_total ?? 0) -
-            (nbArticleTotal + nbAmendementTotal + nbSousAmendementTotal)
-        ) || nbAutresApercu;
-
-    const tldr: string[] = [];
-    if (referenceScrutin?.date_scrutin) tldr.push(`Scrutin de référence : ${fmtDateFR(referenceScrutin.date_scrutin)}`);
-    if (loi.date_dernier_scrutin) tldr.push(`Dernier vote (dans la liste) : ${fmtDateFR(loi.date_dernier_scrutin)}`);
-
-    const groups = groupVotes.map((g) => ({
-      label: (g.groupe_abrev ?? "").trim() || groupLabelForUI(g),
-      stance: stanceFromGroupRow(g),
-    }));
-
-    const featured = pickFeaturedTimeline(timeline ?? [], 5);
-
-    const timelineUI = featured.map((s, idx) => ({
-      date: fmtDateFR(s.date_scrutin),
-      title: idx === 0 ? "Vote le plus récent" : idx === 1 ? "Vote clé" : pickTimelineTitleUX(s, idx),
-      description: shortContextFromScrutin(s),
-      scrutinId: s.numero_scrutin,
-      kind: s.kind,
-    }));
+    const match = isLoiSpecialeKey(canonKey, id);
+    if (!match) return null;
 
     return {
-      title,
-      subtitle,
-      statusLabel,
-      aiIntro,
-      tldr,
-      impact: [
-        { label: isScrutinBacked ? "Articles (aperçu)" : "Articles", value: String(nbArticleTotal) },
-        { label: isScrutinBacked ? "Amendements (aperçu)" : "Amendements", value: String(nbAmendementTotal) },
-        { label: isScrutinBacked ? "Sous-amendements (aperçu)" : "Sous-amendements", value: String(nbSousAmendementTotal) },
-        { label: isScrutinBacked ? "Autres (aperçu)" : "Autres", value: String(nbAutresTotal) },
+      title: "Résumé (V0 — rédigé à la main)",
+      sentences: [
+        "Cette loi spéciale autorise l’État à continuer à fonctionner quand le budget annuel n’est pas encore voté.",
+        "Elle permet de maintenir les dépenses indispensables, comme le paiement des salaires publics et le fonctionnement des services de l’État.",
+        "Elle assure la continuité des services essentiels (impôts, sécurité sociale, hôpitaux, services publics).",
+        "Elle ne remplace pas le budget annuel et ne fixe pas les priorités budgétaires de l’année.",
       ],
-      vote: { pour: voteTotals.pour, contre: voteTotals.contre, abstention: voteTotals.abstention },
-      groups,
-      timeline: timelineUI,
+      note:
+        "V0 manuel: ce texte est un prototype éditorial (pas encore généré automatiquement).",
     };
-  }, [loiId, loi, timeline, groupVotes, isScrutinBacked, amendementsDetectedCount, referenceScrutin]);
+  }, [id, canonKey]);
 
-  const politicalSummary = useMemo(() => {
-    if (!model) return undefined;
-    return buildPoliticalSummary(model.groups);
-  }, [model]);
+  /** =========================
+   *  ✅ TIMELINE UI (canon: groupTimelineByYear)
+   *  ========================= */
+  const timelineSections = useMemo(() => {
+    return groupTimelineByYear(timelineRows);
+  }, [timelineRows]);
 
-  const scopeBadges = useMemo(() => {
-    if (!loiId || !model) return [];
-    return scopeBadgesFromContext(loiId, model.title, timeline);
-  }, [loiId, model, timeline]);
+  /** =========================
+   *  ✅ VOTES UI helpers (V0)
+   *  ========================= */
+  const voteScrutinIds = useMemo(() => {
+    const ids = Object.keys(votesByScrutin ?? {});
+    const order = (timelineRows ?? [])
+      .map((r) => String((r as any)?.numero_scrutin ?? "").trim())
+      .filter(Boolean);
+
+    // garde l'ordre timeline (si présent), sinon stable
+    ids.sort((a, b) => {
+      const ia = order.indexOf(a);
+      const ib = order.indexOf(b);
+      if (ia === -1 && ib === -1) return String(b).localeCompare(String(a));
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+
+    return ids;
+  }, [votesByScrutin, timelineRows]);
+
+  const globalFromGroups = (rows: VoteGroupeRow[]) => {
+    const g = { pour: 0, contre: 0, abstention: 0 };
+    for (const r of rows ?? []) {
+      g.pour += Number((r as any)?.pour ?? 0);
+      g.contre += Number((r as any)?.contre ?? 0);
+      g.abstention += Number((r as any)?.abstention ?? 0);
+    }
+    return g;
+  };
+
+  const fmtPct = (x: number, total: number) => {
+    if (!total) return "0%";
+    return `${Math.round((x / total) * 100)}%`;
+  };
+
+  /** =========================
+   *  ✅ MODEL (memo)
+   *  ========================= */
+  const model: CanonModel = useMemo(() => {
+    const editorialFromActu =
+      fromKey === "actu" ? String(fromLabel ?? "").trim() : "";
+
+    // ✅ règle universelle: H1 = heroTitle (lock) sinon fromLabel (si Actu) sinon DB sinon canon
+    const h1 =
+      lockedHeroTitle?.trim() ||
+      editorialFromActu ||
+      loiTitle?.trim() ||
+      titleFromId?.trim() ||
+      "Loi";
+
+    const fallbackHeader: CanonHeader = {
+      title: h1,
+      status: "—",
+      lastStepLabel: "—",
+      lastStepDate: "—",
+      oneLiner: "—",
+    };
+
+    if (!id) {
+      return {
+        header: fallbackHeader,
+        tldr: [],
+        context: undefined,
+        impact: undefined,
+        timeline: [{ label: "Parcours", date: "—", result: "—", proofs: [] }],
+        votes: undefined,
+        measures: undefined,
+        sources: { updatedAt: "Mis à jour: —", sources: [] },
+      };
+    }
+
+    const last = timelineRows?.[0] ?? null;
+
+    let header: CanonHeader = fallbackHeader;
+    try {
+      header = buildCanonHeader({
+        loiTitle: h1,
+        referenceResultText: last?.resultat ?? null,
+        lastTimelineLabel: (last?.titre ?? "").trim() || "Dernier vote",
+        lastTimelineDate: last?.date_scrutin ?? null,
+      }) as any;
+    } catch {
+      header = fallbackHeader;
+    }
+
+    // ✅ Timeline depuis DB
+    let timeline: CanonTimelineStep[] = (timelineRows ?? []).map((r) => {
+      const sid = r.numero_scrutin ? String(r.numero_scrutin) : "";
+      return {
+        label: (r.titre ?? "").trim() || "Étape",
+        date: fmtDateFR(r.date_scrutin),
+        result: (r.resultat ?? "").trim() || undefined,
+        proofs: sid
+          ? [
+              {
+                label: `Voir scrutin ${sid}`,
+                href: `/scrutins/${encodeURIComponent(sid)}`,
+              },
+            ]
+          : [],
+      };
+    });
+
+    // ✅ Fallback Parcours si DB vide : utiliser seedScrutin
+    if (timeline.length === 0 && seedScrutin) {
+      const sid = String(seedScrutin).trim();
+      if (sid) {
+        timeline = [
+          {
+            label: "Vote (détecté via le récit Actu)",
+            date: "—",
+            result: "—",
+            proofs: [
+              {
+                label: `Voir scrutin ${sid}`,
+                href: `/scrutins/${encodeURIComponent(sid)}`,
+              },
+            ],
+          },
+        ];
+      }
+    }
+
+    // ✅ TLDR v0 : d'abord DB, sinon fallback via seedScrutin
+    let tldr: CanonTLDRBullet[] = buildTLDRv0({
+      loiId: id,
+      loiTitle: h1,
+      timeline: timelineRows as any,
+    });
+
+    if (tldr.length === 0 && seedScrutin) {
+      const sid = String(seedScrutin).trim();
+      if (sid) {
+        tldr = [
+          {
+            text: "Dernier vote détecté via le récit Actu (données détaillées en cours de branchement).",
+            proof: {
+              label: `Voir le scrutin ${sid}`,
+              href: `/scrutins/${encodeURIComponent(sid)}`,
+            },
+          },
+        ];
+      }
+    }
+
+    return {
+      header,
+      tldr,
+      context: undefined,
+      impact: undefined,
+      timeline: timeline.length
+        ? timeline
+        : [{ label: "Parcours", date: "—", result: "—", proofs: [] }],
+      votes: undefined,
+      measures: undefined,
+      sources: {
+        updatedAt: "Mis à jour: —",
+        sources: [
+          { label: "Fiche loi (app)", href: `/lois/${encodeURIComponent(id)}` },
+        ],
+      },
+    };
+  }, [
+    id,
+    lockedHeroTitle,
+    fromKey,
+    fromLabel,
+    loiTitle,
+    timelineRows,
+    titleFromId,
+    seedScrutin,
+  ]);
+
+  const showTLDR = model.tldr.length > 0;
+
+  const displaySources: LoiSourceItem[] = useMemo(() => {
+    // 1) DB -> déjà au format UI (kind/label/url)
+    if (sources && sources.length > 0) return sources;
+
+    // 2) Fallback minimal officiel si la DB est vide
+    return toLoiSourcesUI([
+      {
+        kind: "AN_LISTE",
+        label: "Assemblée nationale — projets de loi",
+        url: "https://www2.assemblee-nationale.fr/documents/liste?type=projets-loi",
+        date: null,
+      },
+      {
+        kind: "DATA_AN",
+        label: "data.assemblee-nationale.fr",
+        url: "https://data.assemblee-nationale.fr/",
+        date: null,
+      },
+    ]);
+  }, [sources]);
+
+  const showEnClairV1 = enClair.length > 0;
+  const showEnClairAny = showEnClairV1 || showTLDR;
+
+  // ✅ auto-scroll anchor si demandé (après layout + chargement)
+  const didAutoScroll2 = useRef(false);
+  useEffect(() => {
+    if (didAutoScroll2.current) return;
+    if (loading) return;
+    if (!initialAnchor) return;
+
+    const key = String(initialAnchor);
+    const y = (anchorY as any)[key];
+    if (typeof y !== "number") return;
+
+    didAutoScroll2.current = true;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 10), animated: true });
+  }, [loading, initialAnchor, anchorY]);
 
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} />
-          <Text style={styles.centerHint}>Chargement des informations sur la loi…</Text>
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <Text style={styles.muted}>Chargement…</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  if (error || !model) {
+  if (error) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.center}>
-          <Text style={styles.errorText}>
-            {error ?? (notFound ? "Cette loi n’est pas disponible." : "Aucune donnée disponible pour cette loi.")}
-          </Text>
-
+        <View
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <Text style={styles.muted}>{error}</Text>
           <View style={{ height: 12 }} />
-
-          <Pressable style={styles.actionBtn} onPress={runLoad}>
-            <Text style={styles.actionBtnText}>Réessayer</Text>
-          </Pressable>
-
-          <Pressable style={styles.linkBtn} onPress={() => router.back()}>
-            <Text style={styles.linkText}>← Retour</Text>
+          <Pressable onPress={goBackSmart} style={styles.contextBtn}>
+            <Text style={styles.contextBtnText}>← Retour</Text>
           </Pressable>
         </View>
       </SafeAreaView>
     );
   }
-
-  const isEmptyTimeline = isScrutinBacked && (timeline?.length ?? 0) === 0;
-
-  if (isEmptyTimeline) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.center}>
-          <Text style={styles.errorText}>
-            Cet élément ressemble à un scrutin / événement, mais aucune timeline n’est associée dans la base.
-          </Text>
-
-          <View style={{ height: 10 }} />
-
-          <Text style={styles.centerHint}>
-            👉 Corrige la navigation : un item “scrutin-*” doit ouvrir la fiche Scrutin, pas la fiche Loi.
-          </Text>
-
-          <View style={{ height: 14 }} />
-
-          <Pressable style={styles.actionBtn} onPress={() => router.back()}>
-            <Text style={styles.actionBtnText}>← Retour</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const amendementsSubtitle = isScrutinBacked
-    ? `Aperçu (vote affiché) · ${amendementsCount} repéré(s) dans cette page`
-    : `Aperçu des derniers amendements · ${amendementsCount} au total`;
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
-        {/* ✅ context bar (optionnel) */}
-        {fromKey ? (
-          <View style={styles.contextBar}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.contextKicker}>Tu viens de</Text>
-              <Text style={styles.contextTitle} numberOfLines={1}>
-                {fromLabel ?? "un récit"}
-              </Text>
-            </View>
-
-            <Pressable
-              onPress={() => router.back()}
-              style={styles.contextBtn}
-              android_ripple={{ color: "rgba(255,255,255,0.06)" }}
-            >
-              <Text style={styles.contextBtnText}>← Retour</Text>
-            </Pressable>
-          </View>
-        ) : null}
-
-        <FadeInUp delay={0}>
-          <LoiHero m={model} />
-        </FadeInUp>
-
-        <FadeInUp delay={40}>
-          <View style={styles.scopeCard}>
-            <View style={styles.scopeHeader}>
-              <Text style={styles.scopeTitle}>Périmètre du texte</Text>
-              {isScrutinBacked ? <Text style={styles.scopeHint}>Basé sur les scrutins visibles</Text> : null}
-            </View>
-
-            {scopeBadges.length ? (
-              <View style={styles.scopeRow}>
-                {scopeBadges.slice(0, 8).map((b) => (
-                  <View key={b.label} style={toneStyles(b.tone)}>
-                    <Text style={toneTextStyles(b.tone)} numberOfLines={1}>
-                      {b.label}
-                    </Text>
-                  </View>
-                ))}
-                {scopeBadges.length > 8 ? (
-                  <View style={toneStyles("soft")}>
-                    <Text style={toneTextStyles("soft")}>+{scopeBadges.length - 8}</Text>
-                  </View>
-                ) : null}
-              </View>
+        {/* ✅ Barre haut */}
+        <View style={styles.contextBar}>
+          <View style={{ flex: 1 }}>
+            {fromKey ? (
+              <>
+                <Text style={styles.contextKicker}>Tu viens de</Text>
+                <Text style={styles.contextTitle} numberOfLines={1}>
+                  {fromLabel || "un récit"}
+                </Text>
+              </>
             ) : (
-              <Text style={styles.scopeEmpty}>Périmètre non précisé dans les scrutins disponibles.</Text>
+              <>
+                <Text style={styles.contextKicker}>Navigation</Text>
+                <Text style={styles.contextTitle} numberOfLines={1}>
+                  Retour
+                </Text>
+              </>
+            )}
+          </View>
+
+          <Pressable onPress={goBackSmart} style={styles.contextBtn}>
+            <Text style={styles.contextBtnText}>← Retour</Text>
+          </Pressable>
+        </View>
+
+        {/* 0) HEADER */}
+        <View style={styles.heroCard}>
+          <Text style={styles.heroTitle} numberOfLines={2}>
+            {model.header.title}
+          </Text>
+
+          <View style={styles.heroMetaRow}>
+            <View style={styles.statusPill}>
+              <Text style={styles.statusText}>{model.header.status}</Text>
+            </View>
+
+            <Text style={styles.heroMeta}>
+              {model.header.lastStepLabel} • {model.header.lastStepDate}
+            </Text>
+          </View>
+
+          <Text style={styles.heroOneLiner} numberOfLines={2}>
+            {model.header.oneLiner}
+          </Text>
+
+          <View style={styles.anchorRow}>
+            {!!resumeV0 && (
+              <Pressable
+                onPress={() => scrollToAnchor("resume")}
+                style={styles.anchorBtn}
+              >
+                <Text style={styles.anchorText}>Résumé</Text>
+              </Pressable>
             )}
 
-            {isScrutinBacked ? (
-              <Text style={styles.scopeFoot}>
-                Une loi peut être examinée par étapes (article liminaire, première partie, CMP…). Ici, nous rendons
-                explicite le périmètre réel du vote affiché.
-              </Text>
-            ) : null}
+            {showEnClairAny && (
+              <Pressable
+                onPress={() => scrollToAnchor("tldr")}
+                style={styles.anchorBtn}
+              >
+                <Text style={styles.anchorText}>En clair</Text>
+              </Pressable>
+            )}
+
+            <Pressable
+              onPress={() => scrollToAnchor("timeline")}
+              style={styles.anchorBtn}
+            >
+              <Text style={styles.anchorText}>Parcours</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => scrollToAnchor("votes")}
+              style={styles.anchorBtn}
+            >
+              <Text style={styles.anchorText}>Votes</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => scrollToAnchor("sources")}
+              style={styles.anchorBtn}
+            >
+              <Text style={styles.anchorText}>Sources</Text>
+            </Pressable>
           </View>
-        </FadeInUp>
+        </View>
 
-        <FadeInUp delay={60}>
-          <LoiAIIntroBlock m={model} />
-        </FadeInUp>
+        {/* ✅ A1) RÉSUMÉ V0 (MANUEL) */}
+        {!!resumeV0 && (
+          <View onLayout={setAnchor("resume")}>
+            <View style={styles.card}>
+              <SectionTitle
+                title={resumeV0.title ?? "Résumé (V0)"}
+                subtitle="Prototype éditorial — lisible en 20 secondes"
+                right={
+                  <View style={styles.v0Pill}>
+                    <Text style={styles.v0PillText}>V0</Text>
+                  </View>
+                }
+              />
 
-        {isScrutinBacked && (
-          <FadeInUp delay={90}>
-            <View style={styles.noteCard}>
-              <Text style={styles.noteTitle}>Contexte</Text>
-              <Text style={styles.noteText}>
-                Cette page agrège plusieurs scrutins liés à un même sujet. Les chiffres “Résultat du scrutin de
-                référence” et “Position des groupes” sont calculés à partir d’un scrutin choisi comme référence.
-                {refKindUX ? ` Scrutin de référence : ${refKindUX}.` : ""}
-              </Text>
+              <View style={{ gap: 10 }}>
+                {resumeV0.sentences.map((s, idx) => (
+                  <Text key={`v0-${idx}`} style={styles.bullet}>
+                    • {s}
+                  </Text>
+                ))}
+              </View>
+
+              {!!resumeV0.note && (
+                <Text style={[styles.muted, { marginTop: 10 }]}>
+                  {resumeV0.note}
+                </Text>
+              )}
             </View>
-          </FadeInUp>
+          </View>
         )}
 
-        {/* ✅ ANCHOR: timeline */}
+        {/* 1) TL;DR */}
+        <View onLayout={setAnchor("tldr")}>
+          <View style={styles.card}>
+            <SectionTitle
+              title="En clair"
+              subtitle="IA assistante — chaque point est vérifiable"
+            />
+            {showEnClairV1 ? (
+              <View style={{ gap: 10 }}>
+                {enClair.map((item, idx) => (
+                  <View key={`enclair-${idx}`} style={{ gap: 6 }}>
+                    <Text style={styles.bullet}>• {item.text}</Text>
+
+                    {(item as any)?.source_url ? (
+                      <ProofLink
+                        p={{
+                          label: String((item as any)?.source_label ?? "Source"),
+                          href: String((item as any)?.source_url),
+                        }}
+                        onPress={openHref}
+                      />
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            ) : !showTLDR ? (
+              <Text style={styles.muted}>
+                Pas assez de preuves pour générer un TL;DR fiable (pas encore
+                branché).
+              </Text>
+            ) : (
+              <View style={{ gap: 10 }}>
+                {model.tldr.slice(0, 6).map((b, idx) => (
+                  <View key={`tldr-${idx}`} style={{ gap: 6 }}>
+                    <Text style={styles.bullet}>• {b.text}</Text>
+                    <ProofLink p={b.proof} onPress={openHref} />
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* 4) Timeline */}
         <View onLayout={setAnchor("timeline")}>
-          <FadeInUp delay={120}>
-            <LoiTimeline
-              m={model}
-              onStepPress={(scrutinId) => {
-                const sid = (scrutinId ?? "").trim();
-                if (!sid) return;
-                router.push(routeFromItemId(sid) as any);
-              }}
-              onSeeAll={() => {
-                if (!loiId) return;
-                router.push({
-                  pathname: "/(tabs)/lois/[id]/timeline",
-                  params: { id: String(loiId) },
-                } as any);
-              }}
+          <View style={styles.card}>
+            <SectionTitle
+              title="Parcours législatif"
+              subtitle="Lecture simple — classée par année"
+              right={
+                timelineRows.length > 12 ? (
+                  <Text style={styles.muted}>+{timelineRows.length - 12}</Text>
+                ) : null
+              }
             />
-          </FadeInUp>
-        </View>
 
-        {/* ✅ ANCHOR: vote */}
-        <View onLayout={setAnchor("vote")}>
-          <FadeInUp delay={180}>
-            <LoiVoteResult m={model} />
-          </FadeInUp>
-        </View>
+            <View style={{ gap: 10 }}>
+              {timelineSections.length === 0 ? (
+                model.timeline.map((s, idx) => (
+                  <View key={`step-${idx}`} style={styles.timelineRow}>
+                    <View style={styles.timelineLeft}>
+                      <View style={styles.timelineDot} />
+                      {idx < model.timeline.length - 1 ? (
+                        <View style={styles.timelineLine} />
+                      ) : null}
+                    </View>
 
-        {/* ✅ ANCHOR: groups */}
-        <View onLayout={setAnchor("groups")}>
-          <FadeInUp delay={240}>
-            <LoiGroupVotes
-              m={model}
-              onGroupPress={(groupLabel) => {
-                const key = (groupLabel ?? "").trim();
-                if (!key || !loiId) return;
+                    <View style={{ flex: 1, gap: 4 }}>
+                      <Text style={styles.timelineLabel}>{s.label}</Text>
+                      <Text style={styles.muted}>
+                        {(s.date ?? "—") + (s.result ? ` • ${s.result}` : "")}
+                      </Text>
 
-                const hit = groupRoutingIndex[key];
-                if (!hit?.groupe_norm) return;
+                      {(s.proofs?.length ?? 0) > 0 ? (
+                        <View style={styles.proofRow}>
+                          {s.proofs?.slice(0, 3).map((p) => (
+                            <ProofLink key={p.label} p={p} onPress={openHref} />
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                ))
+              ) : (
+                timelineSections.map((sec) => (
+                  <View key={`sec-${sec.yearLabel}`} style={{ gap: 10 }}>
+                    <View style={styles.yearHeader}>
+                      <Text style={styles.yearTitle}>{sec.yearLabel}</Text>
+                      <Text style={styles.yearCount}>{sec.items.length}</Text>
+                    </View>
 
-                const lastScrutinId = referenceScrutinId ? String(referenceScrutinId) : null;
+                    {sec.items.map((r, idx) => {
+                      const sid = r.numero_scrutin ? String(r.numero_scrutin) : "";
+                      const label = (r.titre ?? "").trim() || "Étape";
+                      const date = fmtDateFR(r.date_scrutin);
+                      const result = (r.resultat ?? "").trim() || "";
 
-                router.push({
-                  pathname: `/(tabs)/lois/${encodeURIComponent(String(loiId))}/groupes/${encodeURIComponent(
-                    hit.groupe_norm
-                  )}/deputes`,
-                  params: {
-                    ...(lastScrutinId ? { vs: lastScrutinId } : {}),
-                    ...(hit.groupe_label ? { groupe_label: hit.groupe_label } : {}),
-                  },
-                } as any);
-              }}
-            />
-          </FadeInUp>
-        </View>
+                      return (
+                        <View
+                          key={`${sec.yearLabel}-${sid || idx}`}
+                          style={styles.timelineRow}
+                        >
+                          <View style={styles.timelineLeft}>
+                            <View style={styles.timelineDot} />
+                          </View>
 
-        <FadeInUp delay={300}>
-          <View style={styles.foldCard}>
-            <SectionToggle
-              title="À retenir"
-              subtitle="Résumé factuel"
-              open={showTLDR}
-              onToggle={() => setShowTLDR((v) => !v)}
-            />
-            {showTLDR ? <LoiTLDR m={model} /> : null}
+                          <View style={{ flex: 1, gap: 4 }}>
+                            <Text style={styles.timelineLabel}>{label}</Text>
+                            <Text style={styles.muted}>
+                              {(date ?? "—") + (result ? ` • ${result}` : "")}
+                            </Text>
+
+                            {sid ? (
+                              <View style={styles.proofRow}>
+                                <ProofLink
+                                  p={{
+                                    label: `Voir scrutin ${sid}`,
+                                    href: `/scrutins/${encodeURIComponent(sid)}`,
+                                  }}
+                                  onPress={openHref}
+                                />
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))
+              )}
+            </View>
           </View>
-        </FadeInUp>
+        </View>
 
-        {!!politicalSummary && (
-          <FadeInUp delay={360}>
-            <View style={styles.foldCard}>
-              <SectionToggle
-                title="Lecture politique"
-                subtitle="Interprétation (optionnelle)"
-                open={showPolitical}
-                onToggle={() => setShowPolitical((v) => !v)}
-              />
-              {showPolitical ? (
-                <View style={styles.politicalInner}>
-                  <Text style={styles.politicalText}>{politicalSummary}</Text>
-                </View>
-              ) : null}
-            </View>
-          </FadeInUp>
-        )}
+        {/* 5) Votes (V0) */}
+        <View onLayout={setAnchor("votes")}>
+          <View style={styles.card}>
+            <SectionTitle
+              title="Votes"
+              subtitle="Résultats par scrutin — puis détail par groupes"
+              right={
+                voteScrutinIds.length ? (
+                  <Text style={styles.muted}>{voteScrutinIds.length} scrutin(s)</Text>
+                ) : null
+              }
+            />
 
-        <AmendementsHighlights
-          items={amendHighlights}
-          totalCount={amendTotal}
-          onPressItem={(it) => {
-            const href = (it as any)?.link?.href ? String((it as any).link.href) : "";
-            if (!href) return;
+            {voteScrutinIds.length === 0 ? (
+              <Text style={styles.muted}>
+                Pas de votes disponibles (pas de scrutin détecté ou table non branchée).
+              </Text>
+            ) : (
+              <View style={{ gap: 10 }}>
+                {voteScrutinIds.map((sid, idx) => {
+                  const rows = (votesByScrutin as any)?.[sid] ?? [];
+                  const g = globalFromGroups(rows);
+                  const total = g.pour + g.contre + g.abstention;
 
-            // ✅ Si c'est un id item (scrutin-* / loi-*), on passe par la route canon
-            if (href.startsWith("scrutin-") || href.startsWith("loi-")) {
-              router.push(routeFromItemId(href) as any);
-              return;
-            }
-
-            // ✅ Sinon on accepte une URL interne déjà prête
-            router.push(href as any);
-          }}
-        />
-
-        {/* ✅ ANCHOR: amendements */}
-        <View onLayout={setAnchor("amendements")}>
-          <FadeInUp delay={420}>
-            <View style={styles.foldCard}>
-              <SectionToggle
-                title="Amendements & sous-amendements"
-                subtitle={amendementsSubtitle}
-                open={showAmendements}
-                onToggle={() => setShowAmendements((v) => !v)}
-              />
-
-              {showAmendements ? (
-                <View style={{ paddingTop: 8 }}>
-                  {(amendementsUI?.length ?? 0) === 0 ? (
-                    <Text style={styles.politicalText}>Aucun amendement n’apparaît dans l’aperçu actuel.</Text>
-                  ) : (
-                    amendementsUI.map((a, idx) => (
-                      <Pressable
-                        key={`${a.scrutinId ?? "x"}-${idx}`}
-                        onPress={() => {
-                          const sid = (a.scrutinId ?? "").trim();
-                          if (!sid) return;
-                          router.push(routeFromItemId(sid) as any);
-                        }}
-                        style={{
-                          paddingVertical: 10,
-                          borderTopWidth: idx === 0 ? 0 : 1,
-                          borderTopColor: BORDER,
-                        }}
-                      >
-                        <Text style={{ color: colors.text, fontWeight: "800", fontSize: 13 }}>{a.title}</Text>
-                        <Text style={{ color: colors.subtext, marginTop: 3, fontSize: 12 }}>
-                          {a.date} • {a.description}
+                  return (
+                    <Fold
+                      key={`vote-${sid}`}
+                      title={`Scrutin ${sid}`}
+                      subtitle={`Global: ${g.pour} pour • ${g.contre} contre • ${g.abstention} abst. (${total} exprimés)`}
+                      defaultOpen={idx === 0}
+                    >
+                      <View style={{ gap: 6, marginBottom: 8 }}>
+                        <Text style={styles.muted}>
+                          Pour: {g.pour} ({fmtPct(g.pour, total)}) • Contre: {g.contre} (
+                          {fmtPct(g.contre, total)}) • Abst.: {g.abstention} (
+                          {fmtPct(g.abstention, total)})
                         </Text>
-                      </Pressable>
-                    ))
-                  )}
-                </View>
-              ) : null}
-            </View>
-          </FadeInUp>
+
+                        <Pressable
+                          onPress={() =>
+                            openHref(`/scrutins/${encodeURIComponent(sid)}`)
+                          }
+                          style={styles.sourceRow}
+                        >
+                          <Text style={styles.sourceLabel}>
+                            Voir le détail du scrutin →
+                          </Text>
+                          <Text style={styles.chev}>→</Text>
+                        </Pressable>
+                      </View>
+
+                      <View style={{ gap: 8 }}>
+                        {rows.slice(0, 12).map((r: VoteGroupeRow, j: number) => {
+                          const label = (r.groupe_label || r.groupe || "Groupe").trim();
+                          const t =
+                            (r.pour ?? 0) + (r.contre ?? 0) + (r.abstention ?? 0);
+                          const pos = String((r as any)?.position_majoritaire ?? "")
+                            .trim()
+                            .toUpperCase();
+
+                          return (
+                            <View
+                              key={`g-${sid}-${label}-${j}`}
+                              style={styles.voteGroupRow}
+                            >
+                              <Text style={styles.voteGroupTitle}>
+                                {label}
+                                {pos ? ` — ${pos}` : ""}
+                              </Text>
+                              <Text style={styles.muted}>
+                                {r.pour} pour • {r.contre} contre • {r.abstention} abst.
+                                (total {t})
+                              </Text>
+                            </View>
+                          );
+                        })}
+
+                        {rows.length > 12 ? (
+                          <Text style={styles.muted}>+{rows.length - 12} groupes</Text>
+                        ) : null}
+                      </View>
+                    </Fold>
+                  );
+                })}
+              </View>
+            )}
+          </View>
         </View>
 
-        {/* ✅ ANCHOR: impact */}
-        <View onLayout={setAnchor("impact")}>
-          <FadeInUp delay={480}>
-            <View style={styles.foldCard}>
-              <SectionToggle
-                title="Détails"
-                subtitle="Informations techniques"
-                open={showImpact}
-                onToggle={() => setShowImpact((v) => !v)}
-              />
-              {showImpact ? <LoiImpact m={model} /> : null}
-            </View>
-          </FadeInUp>
-        </View>
+        {/* 7) Sources */}
+        <View onLayout={setAnchor("sources")}>
+          <View style={styles.card}>
+            <SectionTitle title="Sources" subtitle={model.sources.updatedAt} />
 
-        {isScrutinBacked && (
-          <FadeInUp delay={540}>
-            <Text style={styles.disclaimer}>
-              Les chiffres affichés correspondent aux scrutins visibles et au scrutin sélectionné comme référence.
+            <View style={{ gap: 10 }}>
+              <LoiSourcesBlock sources={displaySources} />
+
+              {model.sources.sources.slice(0, 6).map((s) => (
+                <Pressable
+                  key={s.label}
+                  onPress={() => openHref(s.href)}
+                  style={styles.sourceRow}
+                >
+                  <Text style={styles.sourceLabel}>{s.label}</Text>
+                  <Text style={styles.chev}>→</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={[styles.muted, { marginTop: 10 }]}>
+              Règle: la page se termine toujours par la traçabilité.
             </Text>
-          </FadeInUp>
-        )}
+          </View>
+        </View>
+
+        <View style={{ height: 20 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+/** =========================
+ *  Styles (papier)
+ *  ========================= */
+const BORDER = LINE;
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  content: { padding: 16, gap: 12, paddingBottom: 24 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 16 },
+  safe: { flex: 1, backgroundColor: PAPER },
+  content: { padding: 16, gap: 12, paddingBottom: 28 },
 
-  centerHint: { color: colors.subtext, marginTop: 10, fontSize: 12 },
-
-  errorText: {
-    color: colors.danger,
-    textAlign: "center",
-    paddingHorizontal: 16,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "800",
-  },
-
-  actionBtn: {
-    marginTop: 8,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderColor: BORDER,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  actionBtnText: { color: colors.text, fontWeight: "900", fontSize: 12 },
-
-  linkBtn: { marginTop: 10, paddingHorizontal: 10, paddingVertical: 8 },
-  linkText: { color: colors.subtext, fontSize: 12, fontWeight: "800" },
-
-  // ✅ Context bar (récit → preuve)
   contextBar: {
-    backgroundColor: "rgba(255,255,255,0.04)",
+    backgroundColor: PAPER_CARD,
     borderWidth: 1,
     borderColor: BORDER,
     borderRadius: 14,
@@ -1402,156 +1567,217 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  contextKicker: { color: colors.subtext, fontSize: 11, fontWeight: "900" },
-  contextTitle: { color: colors.text, fontSize: 13, fontWeight: "900", marginTop: 2 },
+  contextKicker: { color: INK_SOFT, fontSize: 11, fontWeight: "900" },
+  contextTitle: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: "900",
+    marginTop: 2,
+  },
   contextBtn: {
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: "rgba(18,20,23,0.04)",
     borderWidth: 1,
     borderColor: BORDER,
   },
-  contextBtnText: { color: colors.text, fontSize: 12, fontWeight: "900" },
+  contextBtnText: { color: INK, fontSize: 12, fontWeight: "900" },
 
-  foldCard: {
-    backgroundColor: colors.card,
+  heroCard: {
+    backgroundColor: PAPER_CARD,
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    gap: 10,
+  },
+  heroTitle: {
+    color: INK,
+    fontSize: 18,
+    fontWeight: "900",
+    lineHeight: 22,
+  },
+  heroMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(18,20,23,0.04)",
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  statusText: { color: INK, fontSize: 11, fontWeight: "900" },
+  heroMeta: { color: INK_SOFT, fontSize: 12, fontWeight: "800" },
+  heroOneLiner: {
+    color: INK_SOFT,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+
+  anchorRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  anchorBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.03)",
+  },
+  anchorText: { color: INK, fontSize: 12, fontWeight: "900" },
+
+  card: {
+    backgroundColor: PAPER_CARD,
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
     borderColor: BORDER,
   },
-
-  toggleRow: {
+  sectionHead: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 10,
-    paddingHorizontal: 2,
-    paddingVertical: 6,
+    marginBottom: 10,
   },
-  toggleTitle: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  toggleSub: {
-    color: colors.subtext,
+  sectionTitle: { color: INK, fontSize: 13, fontWeight: "900" },
+  sectionSub: {
+    color: INK_SOFT,
     fontSize: 12,
     marginTop: 2,
+    fontWeight: "700",
   },
-  toggleChevron: {
-    color: colors.subtext,
+
+  // ✅ A1 pill V0
+  v0Pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(18,20,23,0.04)",
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  v0PillText: {
+    color: INK,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+
+  body: { color: INK_SOFT, fontSize: 13, lineHeight: 18 },
+  muted: { color: INK_SOFT, fontSize: 12, lineHeight: 16, opacity: 0.9 },
+  bold: { color: INK, fontWeight: "900" },
+
+  bullet: {
+    color: INK,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "800",
+  },
+  proofPill: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.03)",
+  },
+  proofText: { color: INK_SOFT, fontSize: 12, fontWeight: "800" },
+
+  yearHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.03)",
+  },
+  yearTitle: { color: INK, fontSize: 13, fontWeight: "900" },
+  yearCount: { color: INK_SOFT, fontSize: 12, fontWeight: "900" },
+
+  timelineRow: { flexDirection: "row", gap: 10 },
+  timelineLeft: { width: 16, alignItems: "center" },
+  timelineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(18,20,23,0.35)",
+    marginTop: 4,
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: BORDER,
+    marginTop: 6,
+    borderRadius: 999,
+  },
+  timelineLabel: { color: INK, fontSize: 13, fontWeight: "900" },
+
+  proofRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 6,
+  },
+
+  foldRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  foldTitle: { color: INK, fontSize: 13, fontWeight: "900" },
+  foldSub: {
+    color: INK_SOFT,
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: "700",
+  },
+  foldIcon: {
+    color: INK_SOFT,
     fontSize: 18,
     fontWeight: "900",
     width: 22,
     textAlign: "right",
   },
 
-  politicalInner: {
-    paddingTop: 8,
-    paddingHorizontal: 2,
-  },
-  politicalText: {
-    color: colors.subtext,
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  disclaimer: {
-    marginTop: 8,
-    color: colors.subtext,
-    fontSize: 12,
-    lineHeight: 16,
-    opacity: 0.85,
-  },
-
-  noteCard: {
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 14,
-    padding: 12,
-  },
-  noteTitle: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: "900",
-    marginBottom: 6,
-  },
-  noteText: {
-    color: colors.subtext,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-
-  scopeCard: {
-    backgroundColor: "rgba(255,255,255,0.04)",
-    borderWidth: 1,
-    borderColor: BORDER,
-    borderRadius: 14,
-    padding: 12,
-  },
-  scopeHeader: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 8,
-  },
-  scopeTitle: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: "900",
-  },
-  scopeHint: {
-    color: colors.subtext,
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  scopeRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  scopeEmpty: {
-    color: colors.subtext,
-    fontSize: 12,
-    lineHeight: 16,
-    opacity: 0.9,
-  },
-  scopeFoot: {
-    marginTop: 8,
-    color: colors.subtext,
-    fontSize: 11,
-    lineHeight: 15,
-    opacity: 0.85,
-  },
-
-  scopePill: {
+  // ✅ Votes rows
+  voteGroupRow: {
+    paddingVertical: 10,
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 14,
     borderWidth: 1,
-    maxWidth: "100%",
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.02)",
+    gap: 4,
   },
-  scopePillText: {
-    fontSize: 11,
-    fontWeight: "900",
-  },
-  scopePillSuccess: {
-    backgroundColor: "rgba(34,197,94,0.12)",
-    borderColor: "rgba(34,197,94,0.28)",
-  },
-  scopePillTextSuccess: { color: "#86efac" },
+  voteGroupTitle: { color: INK, fontSize: 12, fontWeight: "900" },
 
-  scopePillWarn: {
-    backgroundColor: "rgba(250,204,21,0.10)",
-    borderColor: "rgba(250,204,21,0.22)",
+  impactCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.02)",
+    padding: 12,
+    gap: 6,
   },
-  scopePillTextWarn: { color: "#fde68a" },
+  impactTitle: { color: INK, fontSize: 12, fontWeight: "900" },
 
-  scopePillSoft: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderColor: "rgba(255,255,255,0.10)",
+  sourceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.02)",
   },
-  scopePillTextSoft: { color: colors.subtext },
+  sourceLabel: { color: INK, fontSize: 12, fontWeight: "900" },
+  chev: { color: INK, fontSize: 18, fontWeight: "900" },
 });

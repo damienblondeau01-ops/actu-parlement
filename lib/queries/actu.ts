@@ -46,7 +46,8 @@ function dlog(...args: any[]) {
 function asISO(d: any): string {
   if (!d) return new Date().toISOString();
   if (typeof d === "string" && d.includes("T")) return d;
-  if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) return `${d}T12:00:00.000Z`;
+  if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d))
+    return `${d}T12:00:00.000Z`;
   return new Date(d).toISOString();
 }
 
@@ -123,7 +124,8 @@ function buildHref(entity: Entity, rawId: string | null | undefined): string | n
   const id = String(rawId ?? "").trim();
   if (!id) return null;
 
-  if (entity === "amendement" || entity === "motion" || entity === "declaration") return null;
+  if (entity === "amendement" || entity === "motion" || entity === "declaration")
+    return null;
   return routeFromItemId(id);
 }
 
@@ -160,8 +162,6 @@ function debugScrutinsCanonStats(scrutinsItems: ActuItem[]) {
     else canonNull += 1;
   }
 
-  // on ne peut pas connaître précisément les filtrés ici (car déjà filtrés),
-  // mais on log l'heuristique sur l'ID principal si tu veux :
   for (const it of scrutinsItems) {
     if (isEventIdLike(it.id)) filteredEventIds += 1;
   }
@@ -190,7 +190,6 @@ export async function fetchActuItems(opts?: {
   const limLois = opts?.limLois ?? 40;
 
   // 1) SCRUTINS (view enrichie)
-  // Schéma: numero_scrutin, loi_id_canon, loi_id_scrutin, date_scrutin, titre, objet, resultat, kind, article_ref
   const { data: scrutins, error: e1 } = await supabase
     .from("scrutins_loi_enrichis_unified")
     .select(
@@ -213,11 +212,9 @@ export async function fetchActuItems(opts?: {
 
   debugScrutinsViewSnapshot(scrutins as any[]);
 
-  const scrutinsItems: ActuItem[] = (scrutins ?? []).map((r: any) => {
-    // ✅ loi_id_canon (filtré uniquement si c'est un vrai id event "scrutin-4944")
+  const scrutinsItems: ActuItem[] = ((scrutins ?? []) as any[]).map((r: any) => {
     const loiIdCanon = safeCanonLoiId(r.loi_id_canon);
 
-    // ✅ ID principal côté app: slug scrutin-* si dispo sinon "scrutin-<numero_scrutin>"
     const num = safeStr(r.numero_scrutin);
     const loiIdScrutin = safeStr(r.loi_id_scrutin);
     const idScrutin = loiIdScrutin || (num ? `scrutin-${num}` : "scrutin");
@@ -234,7 +231,6 @@ export async function fetchActuItems(opts?: {
       id: String(idScrutin),
       entity: "scrutin",
 
-      // ✅ clé: loi_id = CANON seulement (et "scrutin-public-..." est désormais accepté)
       loi_id: loiIdCanon,
 
       article_ref: safeStr(r.article_ref),
@@ -245,7 +241,6 @@ export async function fetchActuItems(opts?: {
       subtitle,
       tldr: null,
 
-      // ✅ alias raw
       titre,
       objet,
       resultat: safeStr(r.resultat),
@@ -255,9 +250,30 @@ export async function fetchActuItems(opts?: {
     };
   });
 
+  // ✅ DEBUG: retrouver la row DB qui contient "Permettre"
+  if (DEBUG_ACTU) {
+    const scrAny = (scrutins ?? []) as any[];
+    const hit = scrAny.find((r: any) =>
+      String(r?.titre ?? r?.objet ?? "")
+        .toLowerCase()
+        .includes("permettre")
+    ) as any | undefined;
+
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("[ACTU][DB HIT] found =", !!hit);
+    if (hit) {
+      console.log("[ACTU][DB HIT] keys =", Object.keys(hit ?? {}));
+      console.log("[ACTU][DB HIT] loi_id_canon =", hit?.loi_id_canon);
+      console.log("[ACTU][DB HIT] loi_id_scrutin =", hit?.loi_id_scrutin);
+      console.log("[ACTU][DB HIT] numero_scrutin =", hit?.numero_scrutin);
+      console.log("[ACTU][DB HIT] titre =", hit?.titre ?? hit?.objet);
+    }
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  }
+
   debugScrutinsCanonStats(scrutinsItems);
 
-  // 2) LOIS (dernière activité) — si ta view est vide, pas grave
+  // 2) LOIS (dernière activité)
   const { data: lois, error: e2 } = await supabase
     .from("lois_recent")
     .select("*")
@@ -266,13 +282,18 @@ export async function fetchActuItems(opts?: {
 
   if (e2) throw new Error(`lois_recent: ${e2.message}`);
 
-  const loisItems: ActuItem[] = (lois ?? []).map((r: any) => {
+  const loisItems: ActuItem[] = ((lois ?? []) as any[]).map((r: any) => {
     const rawId =
-      safeStr(r.loi_id) ?? safeStr(r.loi_id_canon) ?? safeStr(r.id_dossier) ?? safeStr(r.id) ?? "loi";
+      safeStr(r.loi_id) ??
+      safeStr(r.loi_id_canon) ??
+      safeStr(r.id_dossier) ??
+      safeStr(r.id) ??
+      "loi";
 
-    const dateISO = asISO(r.date_dernier_scrutin ?? r.derniere_activite_date ?? r.date);
+    const dateISO = asISO(
+      r.date_dernier_scrutin ?? r.derniere_activite_date ?? r.date
+    );
 
-    // ✅ si pollution (scrutin-...), on corrige entity (et on évite de forcer loi_id)
     const entity: Entity = detectEntityFromIdFallback(String(rawId), "loi");
 
     const title =
@@ -295,7 +316,6 @@ export async function fetchActuItems(opts?: {
       id: String(rawId),
       entity,
 
-      // ✅ loi_id “canon” seulement si entity=loi, et filtré au cas où (scrutin-4944 etc.)
       loi_id: entity === "loi" ? safeCanonLoiId(rawId) : null,
 
       date: dateISO,
@@ -305,15 +325,14 @@ export async function fetchActuItems(opts?: {
       subtitle,
       tldr: safeStr(r.tldr ?? r.resume),
 
-      // alias raw (si dispo)
-      titre: safeStr(r.titre_loi_canon) ?? safeStr(r.titre_loi) ?? safeStr(r.titre),
+      titre:
+        safeStr(r.titre_loi_canon) ?? safeStr(r.titre_loi) ?? safeStr(r.titre),
       objet: safeStr(r.objet) ?? null,
 
       route: { href: buildHref(entity, String(rawId)) },
     };
   });
 
-  // merge + tri global
   const merged = [...scrutinsItems, ...loisItems].filter(Boolean);
   merged.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
   return merged;

@@ -3,27 +3,21 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-  "start": "expo start",
-  "android": "expo start --android",
-  "ios": "expo start --ios",
-  "web": "expo start --web",
-
-  "test": "jest",
-  "lint": "eslint app lib --ext .ts,.tsx",
-  "typecheck": "tsc --noEmit",
-  "healthcheck": "node ingestion/healthcheck.js",
-
-  "sync:scrutins": "node ingestion/sync_scrutins.js",
-  "sync:deputes": "node ingestion/sync_deputes.js",
-  "sync:votes:l17": "node ingestion/votes/fetch_votes_from_opendata.js 17",
-  "sync:daily:l17": "node ingestion/sync_daily_17.js",
-
-  "dossiers:download": "node jobs/download_latest_dossiers_zip.js",
-  "dossiers:sync": "node ingestion/lois/fetch_dossiers_legislatifs.cjs",
-
-  "ai:resumes": "node ingestion/generate_resumes_lois.js",
-
-  "postinstall": "npx expo-router install"
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "test": "jest",
+    "lint": "eslint app lib --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "healthcheck": "node ingestion/healthcheck.js",
+    "sync:scrutins": "node ingestion/sync_scrutins.js",
+    "sync:deputes": "node ingestion/sync_deputes.js",
+    "sync:votes:l17": "node ingestion/votes/fetch_votes_from_opendata.js 17",
+    "sync:daily:l17": "node ingestion/sync_daily_17.js",
+    "dossiers:download": "node jobs/download_latest_dossiers_zip.js",
+    "dossiers:sync": "node ingestion/lois/fetch_dossiers_legislatifs.cjs",
+    "ai:resumes": "node ingestion/generate_resumes_lois.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -41,7 +35,7 @@
     "expo-image": "~3.0.10",
     "expo-linear-gradient": "~15.0.8",
     "expo-linking": "~8.0.8",
-    "expo-router": "~6.0.14",
+    "expo-router": "^6.0.21",
     "expo-splash-screen": "~31.0.10",
     "expo-status-bar": "~3.0.8",
     "expo-symbols": "~1.0.7",
