@@ -1214,17 +1214,6 @@ export default function ActuIndexScreen() {
           restoreOffset,
         });
 
-if ((ui?.title ?? "").toLowerCase().includes("loi spéciale") || (heroTitle ?? "").toLowerCase().includes("loi spéciale")) {
-  console.log("[ACTU][DEBUG LOI SPECIALE]", {
-    uiTitle: ui?.title,
-    heroTitle,
-    dbLoiId,
-    canonKey,
-    groupKey,
-    itemId: (ui as any)?.id ?? (ui as any)?.itemId ?? null,
-  });
-}
-
 // ✅ RÈGLE PRODUIT (cas spécial) : Loi spéciale (article 45 LOLF)
 // On force le titre citoyen pour éviter le titre technique.
 const canonKeyLower = String(canonKey ?? "").toLowerCase();
