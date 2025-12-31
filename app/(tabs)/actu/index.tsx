@@ -1214,14 +1214,38 @@ export default function ActuIndexScreen() {
           restoreOffset,
         });
 
+if ((ui?.title ?? "").toLowerCase().includes("loi spéciale") || (heroTitle ?? "").toLowerCase().includes("loi spéciale")) {
+  console.log("[ACTU][DEBUG LOI SPECIALE]", {
+    uiTitle: ui?.title,
+    heroTitle,
+    dbLoiId,
+    canonKey,
+    groupKey,
+    itemId: (ui as any)?.id ?? (ui as any)?.itemId ?? null,
+  });
+}
+
+// ✅ RÈGLE PRODUIT (cas spécial) : Loi spéciale (article 45 LOLF)
+// On force le titre citoyen pour éviter le titre technique.
+const canonKeyLower = String(canonKey ?? "").toLowerCase();
+const isLoiSpeciale =
+  canonKeyLower.includes("loi-speciale") ||
+  canonKeyLower.includes("article-45") ||
+  canonKeyLower.includes("lolf");
+
+const heroTitleLocked = isLoiSpeciale
+  ? "Permettre à l’État de fonctionner"
+  : heroTitle;
+
+
         router.push({
           pathname: "/lois/[id]",
           params: {
             id: dbLoiId,
             canonKey,
             fromKey: "actu",
-            fromLabel: heroTitle || undefined,
-            heroTitle: heroTitle || undefined,
+            fromLabel: heroTitleLocked || undefined,
+            heroTitle: heroTitleLocked || undefined,
             restoreId,
             restoreOffset,
             seedScrutin: seedScrutin || undefined,
@@ -1235,6 +1259,7 @@ export default function ActuIndexScreen() {
 
       const target = `/actu/group/${encodeURIComponent(groupKey)}`;
       dlog("[ACTU][OPEN] group fallback", { groupKey, target });
+
 
       router.push({
         pathname: target,
