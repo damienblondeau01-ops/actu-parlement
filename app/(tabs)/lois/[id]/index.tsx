@@ -30,6 +30,7 @@ import {
   fetchLoiTimelineCanon,
   fetchLoiSources,
   fetchLoiTexte,
+  fetchScrutinTotauxForScrutins, // ✅ NEW
 } from "../../../../lib/queries/lois";
 import type {
   LoiTimelineRow,
@@ -44,8 +45,10 @@ import { buildTLDRv0 } from "@/lib/lois/tldr";
 import LoiSourcesBlock from "@/components/loi/LoiSourcesBlock";
 
 import { generateEnClairV1 } from "@/lib/ai/enClair";
-import type { EnClairItem } from "@/lib/ai/types";import { supabase } from "@/lib/supabaseClient";
-
+import type { EnClairItem } from "@/lib/ai/types";
+import { supabase } from "@/lib/supabaseClient";
+import LoiPromulgationBlock from "@/components/loi/LoiPromulgationBlock";
+import { fetchLoiProcedure, type LoiProcedureStep } from "@/lib/queries/procedure";
 
 
 
@@ -70,6 +73,12 @@ const LINE = "rgba(18,20,23,0.14)";
 type RouteParams = {
   id?: string;
   canonKey?: string;
+
+  joParam?: string;
+
+  // ✅ JO (source externe propagée depuis Actu)
+  jo?: string;
+
 
   // provenance
   fromKey?: string;
@@ -202,6 +211,7 @@ type CanonModel = {
   timeline: CanonTimelineStep[];
   votes?: CanonVotes;
   measures?: CanonMeasures;
+  jo_date_promulgation?: string | null;
   sources: CanonSources;
 };
 
@@ -431,6 +441,14 @@ export default function LoiDetailCanonScreen() {
   const params = useLocalSearchParams<RouteParams>();
   const scrollRef = useRef<ScrollView>(null);
 
+  // ✅ helper local (seed) : corrige le suffixe tronqué "-de-la-lo" -> "-de-la-loi"
+  const fixTail = (k: string) =>
+    String(k ?? "")
+      .trim()
+      .replace(/-de-la-lo$/i, "-de-la-loi")
+      .replace(/-de-la-l$/i, "-de-la-loi")
+      .replace(/-de-la-$/i, "-de-la-loi");
+
   const id = useMemo(() => {
     const raw = (params as any)?.id;
     if (typeof raw === "string") return raw;
@@ -504,6 +522,15 @@ export default function LoiDetailCanonScreen() {
     return "";
   }, [params]);
 
+    const joParam = useMemo(() => {
+  // ✅ Actu envoie "joParam"
+  const v = (params as any)?.joParam ?? (params as any)?.jo; // fallback ancien
+  if (typeof v === "string") return v.trim();
+  if (Array.isArray(v)) return String(v[0] ?? "").trim();
+  return "";
+}, [params]);
+
+
   const restoreId = useMemo(() => {
     const v = (params as any)?.restoreId;
     if (typeof v === "string") return v.trim();
@@ -558,9 +585,20 @@ export default function LoiDetailCanonScreen() {
   const [loiTexte, setLoiTexte] = useState<LoiTexteRow | null>(null);
   const [enClair, setEnClair] = useState<EnClairItem[]>([]);
 
+  const [procedureSteps, setProcedureSteps] = useState<LoiProcedureStep[]>([]);
+
   // ✅ Votes (V0): par scrutin -> par groupes
   const [votesByScrutin, setVotesByScrutin] = useState<
     Record<string, VoteGroupeRow[]>
+  >({});
+
+  const [totauxByScrutin, setTotauxByScrutin] = useState<Record<string, any>>(
+    {}
+  );
+
+  // ✅ Totaux fallback depuis scrutins_data (même source que la fiche Scrutin)
+  const [scrutinsDataByNumero, setScrutinsDataByNumero] = useState<
+    Record<string, any>
   >({});
 
   // ✅ anchors (canonical)
@@ -613,16 +651,14 @@ export default function LoiDetailCanonScreen() {
   );
 
   useEffect(() => {
-    console.log("[LOI PARAMS]", {
-      id,
-      canonKey,
-      heroTitle: lockedHeroTitle, // ✅ lock visible en debug
-      seedScrutin,
-      fromKey,
-      fromLabel,
-      loiKey,
-      timelineQueryKey,
-    });
+    console.log("[LOI][PROMULGATION CHECK]", {
+  joParam: joParam || null,
+  model_has: Object.prototype.hasOwnProperty.call(
+    (model as any) ?? {},
+    "jo_date_promulgation"
+  ),
+  model_jo: (model as any)?.jo_date_promulgation ?? null,
+});
   }, [
     id,
     canonKey,
@@ -632,6 +668,7 @@ export default function LoiDetailCanonScreen() {
     fromLabel,
     loiKey,
     timelineQueryKey,
+  joParam,
   ]);
 
   /**
@@ -647,7 +684,12 @@ export default function LoiDetailCanonScreen() {
     setLoiTexte(null);
     setEnClair([]);
     setVotesByScrutin({});
+    setTotauxByScrutin({});
+    setProcedureSteps([]);
+    // ✅ reset fallback scrutins_data (sinon valeurs “fantômes” entre 2 lois)
+    setScrutinsDataByNumero({});
   }, [id]);
+
 
   // ✅ Load minimal: title + timeline
   useEffect(() => {
@@ -664,7 +706,7 @@ export default function LoiDetailCanonScreen() {
           setLoading(false);
           return;
         }
-
+        
         const loi = await fetchLoiDetail(loiKey);
 
         const dbTitle = ((loi as any)?.titre_loi ?? null) as string | null;
@@ -710,27 +752,90 @@ export default function LoiDetailCanonScreen() {
           );
         }
 
-// ✅ Fallback ultime: si on vient d'Actu avec un seedScrutin,
-// on résout le "vrai" loi_id utilisé dans scrutins_par_loi_app via numero_scrutin,
-// puis on relance fetchLoiTimeline avec cette clé.
-if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
-  const seedNum = Number(seedScrutin);
-  if (!Number.isNaN(seedNum)) {
-    const { data: seedRow, error: seedErr } = await supabase
-      .from("scrutins_par_loi_app")
-      .select("loi_id")
-      .eq("numero_scrutin", seedNum)
-      .limit(1)
-      .maybeSingle();
+        // ✅ Fallback ultime: si on vient d'Actu avec un seedScrutin,
+        // objectif: récupérer aussi les scrutins solennels (vote final) via group_key,
+        // sans jamais casser l’écran.
+        if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
+          const seedNum = Number(seedScrutin);
+          if (!Number.isNaN(seedNum)) {
+            // 1) récupérer le group_key via scrutins_data (source fiable)
+            const { data: sd, error: sdErr } = await supabase
+              .from("scrutins_data")
+              .select("group_key")
+              .eq("numero", seedNum)
+              .limit(1)
+              .maybeSingle();
 
-    if (!seedErr && seedRow?.loi_id) {
-      console.log("[LOI TIMELINE] seed resolve loi_id =", seedRow.loi_id);
-      tl = await fetchLoiTimeline(String(seedRow.loi_id), 500);
-    } else {
-      console.log("[LOI TIMELINE] seed resolve failed", { seedScrutin, seedErr });
-    }
-  }
-}
+            const gkRaw = String((sd as any)?.group_key ?? "").trim();
+            const gk = fixTail(gkRaw);
+
+            if (sdErr || !gk) {
+              console.log("[LOI TIMELINE] seed group_key resolve failed", {
+                seedScrutin,
+                sdErr,
+                gkRaw,
+              });
+            } else {
+              // 2) construire les variantes ordinaire/solennel (sur la version réparée)
+              const gkOrd = gk.includes("scrutin-public-solennel-")
+                ? gk.replace(
+                    "scrutin-public-solennel-",
+                    "scrutin-public-ordinaire-"
+                  )
+                : gk;
+
+              const gkSol = gk.includes("scrutin-public-ordinaire-")
+                ? gk.replace(
+                    "scrutin-public-ordinaire-",
+                    "scrutin-public-solennel-"
+                  )
+                : gk;
+
+              // 3) keys uniques (inclut aussi les versions réparées au cas où)
+              const keys = Array.from(
+                new Set(
+                  [gkRaw, gk, gkOrd, gkSol, fixTail(gkOrd), fixTail(gkSol)].filter(
+                    Boolean
+                  )
+                )
+              );
+
+              // 4) fetch timeline via scrutins_data group_key IN (fusion)
+              const { data: rows, error: rowsErr } = await supabase
+                .from("scrutins_data")
+                .select(
+                  "numero,date_scrutin,titre,objet,resultat,kind,article_ref,legislature"
+                )
+                .in("group_key", keys)
+                .order("date_scrutin", { ascending: false })
+                .order("numero", { ascending: false })
+                .limit(500);
+
+              console.log(
+                "[LOI TIMELINE] seed group_key IN =",
+                keys.join(" | "),
+                "| got =",
+                (rows ?? []).length,
+                "| error =",
+                rowsErr?.message ?? null
+              );
+
+              if (!rowsErr) {
+                tl = (rows ?? []).map((r: any) => ({
+                  loi_id: loiKey, // ✅ rattache au canon "loi:..." côté UI
+                  numero_scrutin: String(r.numero ?? ""),
+                  date_scrutin: r.date_scrutin ?? null,
+                  titre: r.titre ?? null,
+                  objet: r.objet ?? null,
+                  resultat: r.resultat ?? null,
+                  kind: r.kind ?? null,
+                  article_ref: r.article_ref ?? null,
+                  legislature: r.legislature ?? null,
+                }));
+              }
+            }
+          }
+        }
 
         const rows = Array.isArray(tl) ? ((tl as any) as LoiTimelineRow[]) : [];
 
@@ -755,6 +860,8 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
         setLoiTitle(computedTitle);
         setTimelineRows(rows);
 
+        
+
         console.log("[LOI SCREEN] id =", id);
         console.log("[LOI SCREEN] loiKey =", loiKey);
         console.log("[LOI SCREEN] timelineQueryKey =", timelineQueryKey);
@@ -771,6 +878,8 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
         setLoading(false);
       }
     })();
+
+    
 
     return () => {
       alive = false;
@@ -794,13 +903,75 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
         if (ids.length === 0) {
           if (!alive) return;
           setVotesByScrutin({});
+          setTotauxByScrutin({});
+          setScrutinsDataByNumero({});
           return;
         }
 
         // ✅ V0 perf: on limite (les plus récents -> timelineRows déjà triée DESC)
-        const idsTop = ids.slice(0, 8);
+        const idsTop = ids;
 
-        const rows = await fetchVotesGroupesForScrutins(idsTop);
+        let rows: any[] = [];
+try {
+  rows = await fetchVotesGroupesForScrutins(idsTop);
+} catch (e) {
+  console.log("[LOI VOTES] fetchVotesGroupesForScrutins failed =", (e as any)?.message ?? e);
+  rows = [];
+}
+
+        // ✅ Totaux globaux : source fiable = scrutins_data (comme l'écran Scrutin)
+        const numsTop = idsTop
+          .map((s) => Number(String(s).replace(/\D+/g, "")))
+          .filter((n) => Number.isFinite(n) && n > 0);
+
+        const totMap: Record<string, any> = {};
+
+        if (numsTop.length > 0) {
+          // 1) tentative avec colonnes "nb_*" (le plus probable)
+          let tdata: any[] | null = null;
+
+          try {
+            const { data, error } = await supabase
+              .from("scrutins_data")
+              .select(
+                "numero, nb_pour, nb_contre, nb_abstention, nb_non_votants, nb_total_votes, nb_votants"
+              )
+              .in("numero", numsTop);
+
+            if (!error) tdata = (data ?? []) as any[];
+          } catch {}
+
+          // 2) fallback si les noms de colonnes sont différents
+          if (!tdata) {
+            try {
+              const { data, error } = await supabase
+                .from("scrutins_data")
+                .select(
+                  "numero, pour, contre, abstention, non_votants, total_votes, votants"
+                )
+                .in("numero", numsTop);
+
+              if (!error) tdata = (data ?? []) as any[];
+            } catch {}
+          }
+
+          for (const t of tdata ?? []) {
+            const sid = String((t as any)?.numero ?? "").trim();
+            if (!sid) continue;
+
+            // normalisation vers les clés attendues par ton UI (nb_pour / nb_contre / nb_abstention)
+            totMap[sid] = {
+              nb_pour: (t as any)?.nb_pour ?? (t as any)?.pour ?? 0,
+              nb_contre: (t as any)?.nb_contre ?? (t as any)?.contre ?? 0,
+              nb_abstention: (t as any)?.nb_abstention ?? (t as any)?.abstention ?? 0,
+              nb_non_votants:
+                (t as any)?.nb_non_votants ?? (t as any)?.non_votants ?? null,
+              nb_total_votes:
+                (t as any)?.nb_total_votes ?? (t as any)?.total_votes ?? null,
+              nb_votants: (t as any)?.nb_votants ?? (t as any)?.votants ?? null,
+            };
+          }
+        }
 
         if (!alive) return;
 
@@ -822,10 +993,19 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
         });
 
         setVotesByScrutin(grouped);
+
+        // ✅ 1) totauxByScrutin = source “globale” prioritaire
+        setTotauxByScrutin(totMap);
+
+        // ✅ 2) scrutinsDataByNumero = filet de sécurité utilisé dans le render si besoin
+        // (avant: tu lisais scrutinsDataByNumero mais tu ne le remplissais jamais)
+        setScrutinsDataByNumero(totMap);
       } catch (e) {
         if (!alive) return;
         console.log("[LOI VOTES] error =", (e as any)?.message ?? e);
         setVotesByScrutin({});
+        setTotauxByScrutin({});
+        setScrutinsDataByNumero({});
       }
     })();
 
@@ -833,6 +1013,34 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
       alive = false;
     };
   }, [timelineRows]);
+
+useEffect(() => {
+  let alive = true;
+
+  (async () => {
+    try {
+      if (!loiKey) {
+        if (!alive) return;
+        setProcedureSteps([]);
+        return;
+      }
+
+      // ✅ IMPORTANT: on requête avec la clé canon "loi:..."
+      const rows = await fetchLoiProcedure(String(loiKey).trim());
+      if (!alive) return;
+      setProcedureSteps(rows ?? []);
+    } catch (e) {
+      if (!alive) return;
+      console.log("[LOI PROCEDURE] error =", (e as any)?.message ?? e);
+      setProcedureSteps([]);
+    }
+  })();
+
+  return () => {
+    alive = false;
+  };
+}, [loiKey]);
+
 
   // ✅ Load DB-first: sources + texte (isolé, zéro impact timeline)
   useEffect(() => {
@@ -847,15 +1055,32 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
       }
 
       // ✅ on essaie d’abord avec loiKey (canonKey si dispo), sinon id
-      const keyPrimary = String(loiKey ?? "").trim() || String(id).trim();
-      const keyFallback = String(id).trim();
+      const keyPrimary =
+  String(loiKey ?? "").trim() ||
+  (canonKey?.startsWith("loi:") ? canonKey.trim() : "") ||
+  canonFromSlug(String(id ?? "")) ||
+  String(id).trim();
+
+// ✅ fallback explicite (anti-TS)
+const keyFallback = String(id).trim();
+
+console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
 
       try {
         const s1 = await fetchLoiSources(keyPrimary);
         const s = (s1?.length ? s1 : await fetchLoiSources(keyFallback)) as any[];
+        console.log("[LOI SOURCES] fetched =", {
+  n1: s1?.length ?? 0,
+  n: s?.length ?? 0,
+  first: (s ?? [])[0] ?? null,
+});
         if (!alive) return;
         // ✅ important: on garde en state le format LoiSourceItem (UI)
         setSources(toLoiSourcesUI(s) ?? []);
+        const ui = toLoiSourcesUI(s) ?? [];
+        console.log("[LOI SOURCES] ui =", { n: ui.length, first: ui[0] ?? null });
+          if (!alive) return;
+        setSources(ui);
       } catch (e) {
         if (!alive) return;
         console.log("[LOI SOURCES] error =", (e as any)?.message ?? e);
@@ -943,35 +1168,185 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
     return groupTimelineByYear(timelineRows);
   }, [timelineRows]);
 
+  /**
+   * ✅ Timeline “humaine” (sans refactor global)
+   * - regroupe par année : Vote final → Articles → Amendements
+   * - affiche un libellé court + une meta (kind/result/date)
+   */
+  const timelineSectionsNice = useMemo(() => {
+    const out: Record<
+      string,
+      { final: LoiTimelineRow[]; articles: LoiTimelineRow[]; amendements: LoiTimelineRow[] }
+    > = {};
+
+    (timelineSections ?? []).forEach((sec: any) => {
+      const year = String(sec?.yearLabel ?? "").trim();
+      const rows = (sec?.items ?? []) as LoiTimelineRow[];
+
+      const final: LoiTimelineRow[] = [];
+      const articles: LoiTimelineRow[] = [];
+      const amendements: LoiTimelineRow[] = [];
+
+      (rows ?? []).forEach((r: any) => {
+        const titre = String((r as any)?.titre ?? "").toLowerCase();
+        const objet = String((r as any)?.objet ?? "").toLowerCase();
+
+        // ✅ Vote final = "l'ensemble du projet/proposition de loi"
+        const looksFinal =
+          !!(r as any)?.is_final ||
+          titre.includes("l'ensemble du projet de loi") ||
+          objet.includes("l'ensemble du projet de loi") ||
+          titre.includes("l'ensemble de la proposition de loi") ||
+          objet.includes("l'ensemble de la proposition de loi");
+
+        const looksAmendement =
+          String((r as any)?.kind ?? "").toLowerCase().includes("amend") ||
+          titre.includes("amendement") ||
+          objet.includes("amendement");
+
+        const looksArticle =
+          String((r as any)?.kind ?? "").toLowerCase() === "article" ||
+          titre.startsWith("l'article") ||
+          objet.startsWith("l'article") ||
+          /\barticle\s+\d+/i.test(String((r as any)?.article_ref ?? ""));
+
+        if (looksFinal) final.push(r);
+        else if (looksAmendement) amendements.push(r);
+        else if (looksArticle) articles.push(r);
+        else amendements.push(r); // fallback
+      });
+
+      // tri articles 1/2/3
+      articles.sort(
+        (a: any, b: any) => (a?.article_num ?? 99) - (b?.article_num ?? 99)
+      );
+
+      out[year] = { final, articles, amendements };
+    });
+
+    return out;
+  }, [timelineSections]);
+
+  const renderTimelineRow = useCallback(
+    (r: LoiTimelineRow, idx: number, keyPrefix: string) => {
+      const sid = r.numero_scrutin ? String(r.numero_scrutin) : "";
+      const title =
+        ((r as any)?.scrutin_label_short ?? (r.titre ?? "").trim()) || "Scrutin";
+
+      const meta = [
+        (r as any)?.kind_label ?? null,
+        (r as any)?.result_short ?? null,
+        r.date_scrutin ? fmtDateFR(r.date_scrutin) : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      return (
+        <View key={`${keyPrefix}-${sid || idx}`} style={styles.timelineRow}>
+          <View style={styles.timelineLeft}>
+            <View style={styles.timelineDot} />
+          </View>
+
+          <View style={{ flex: 1, gap: 4 }}>
+            <Text style={styles.timelineLabel}>{title}</Text>
+            {!!meta && <Text style={styles.timelineMeta}>{meta}</Text>}
+
+            {sid ? (
+              <View style={styles.proofRow}>
+                <ProofLink
+                  p={{
+                    label: `Voir scrutin ${sid}`,
+                    href: `/scrutins/${encodeURIComponent(sid)}`,
+                  }}
+                  onPress={openHref}
+                />
+              </View>
+            ) : null}
+          </View>
+        </View>
+      );
+    },
+    [openHref]
+  );
+
   /** =========================
    *  ✅ VOTES UI helpers (V0)
    *  ========================= */
   const voteScrutinIds = useMemo(() => {
-    const ids = Object.keys(votesByScrutin ?? {});
+    // ✅ source de vérité = timelineRows (sinon la liste disparaît si votesByScrutin est vide)
     const order = (timelineRows ?? [])
       .map((r) => String((r as any)?.numero_scrutin ?? "").trim())
       .filter(Boolean);
 
-    // garde l'ordre timeline (si présent), sinon stable
-    ids.sort((a, b) => {
-      const ia = order.indexOf(a);
-      const ib = order.indexOf(b);
-      if (ia === -1 && ib === -1) return String(b).localeCompare(String(a));
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
+    // ✅ unique + conserve l’ordre timeline
+    return Array.from(new Set(order));
+  }, [timelineRows]);
 
-    return ids;
-  }, [votesByScrutin, timelineRows]);
+  function countsFromAnyVoteRow(r: any) {
+    // 1) ✅ format pivot: pour/contre/abstention
+    const hasPivot = r && (r.pour != null || r.contre != null || r.abstention != null);
+
+    if (hasPivot) {
+      const pour = Number(r.pour ?? 0);
+      const contre = Number(r.contre ?? 0);
+      const abstention = Number(r.abstention ?? 0);
+
+      // si c'est déjà bon → on garde
+      if (pour + contre + abstention > 0) {
+        return { pour, contre, abstention };
+      }
+      // sinon on continue: certains exports mettent 0 mais ont aussi des champs "nb_voix_*"
+    }
+
+    // 2) ✅ variantes courantes: nb_pour/nb_contre/nb_abstention
+    const np = Number((r as any)?.nb_pour ?? (r as any)?.voix_pour ?? 0);
+    const nc = Number((r as any)?.nb_contre ?? (r as any)?.voix_contre ?? 0);
+    const na = Number((r as any)?.nb_abstention ?? (r as any)?.voix_abstention ?? 0);
+
+    if (np + nc + na > 0) {
+      return { pour: np, contre: nc, abstention: na };
+    }
+
+    // 3) ✅ long format: une ligne = une position + nb_voix
+    const nb = Number((r as any)?.nb_voix ?? (r as any)?.nb ?? (r as any)?.count ?? 0);
+
+    const posRaw = String(
+      (r as any)?.position ??
+        (r as any)?.vote ??
+        (r as any)?.choix ??
+        (r as any)?.position_majoritaire ??
+        ""
+    )
+      .trim()
+      .toUpperCase();
+
+    // normalisation basique (POUR/CONTRE/ABSTENTION)
+    const pos =
+      posRaw === "POUR" || posRaw === "Pour".toUpperCase()
+        ? "POUR"
+        : posRaw === "CONTRE"
+        ? "CONTRE"
+        : posRaw === "ABSTENTION"
+        ? "ABSTENTION"
+        : posRaw;
+
+    if (pos === "POUR") return { pour: nb, contre: 0, abstention: 0 };
+    if (pos === "CONTRE") return { pour: 0, contre: nb, abstention: 0 };
+    if (pos === "ABSTENTION") return { pour: 0, contre: 0, abstention: nb };
+
+    return { pour: 0, contre: 0, abstention: 0 };
+  }
 
   const globalFromGroups = (rows: VoteGroupeRow[]) => {
     const g = { pour: 0, contre: 0, abstention: 0 };
+
     for (const r of rows ?? []) {
-      g.pour += Number((r as any)?.pour ?? 0);
-      g.contre += Number((r as any)?.contre ?? 0);
-      g.abstention += Number((r as any)?.abstention ?? 0);
+      const c = countsFromAnyVoteRow(r);
+      g.pour += c.pour;
+      g.contre += c.contre;
+      g.abstention += c.abstention;
     }
+
     return g;
   };
 
@@ -1012,6 +1387,7 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
         timeline: [{ label: "Parcours", date: "—", result: "—", proofs: [] }],
         votes: undefined,
         measures: undefined,
+        jo_date_promulgation: joParam ? joParam : null,
         sources: { updatedAt: "Mis à jour: —", sources: [] },
       };
     }
@@ -1029,6 +1405,10 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
     } catch {
       header = fallbackHeader;
     }
+    // ✅ Règle simple & sûre : si JO connu -> loi promulguée
+if (joParam) {
+  header = { ...header, status: "—" };
+}
 
     // ✅ Timeline depuis DB
     let timeline: CanonTimelineStep[] = (timelineRows ?? []).map((r) => {
@@ -1100,23 +1480,14 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
         : [{ label: "Parcours", date: "—", result: "—", proofs: [] }],
       votes: undefined,
       measures: undefined,
+      jo_date_promulgation: joParam ? joParam : null,
       sources: {
         updatedAt: "Mis à jour: —",
-        sources: [
-          { label: "Fiche loi (app)", href: `/lois/${encodeURIComponent(id)}` },
-        ],
+        sources: [{ label: "Fiche loi (app)", href: `/lois/${encodeURIComponent(id)}` }],
       },
     };
-  }, [
-    id,
-    lockedHeroTitle,
-    fromKey,
-    fromLabel,
-    loiTitle,
-    timelineRows,
-    titleFromId,
-    seedScrutin,
-  ]);
+  }, [ id, lockedHeroTitle, fromKey, fromLabel, loiTitle, timelineRows, titleFromId, seedScrutin, joParam ]);
+
 
   const showTLDR = model.tldr.length > 0;
 
@@ -1197,6 +1568,7 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
     );
   }
 
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
@@ -1225,21 +1597,43 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
           </Pressable>
         </View>
 
+
+
         {/* 0) HEADER */}
         <View style={styles.heroCard}>
           <Text style={styles.heroTitle} numberOfLines={2}>
             {model.header.title}
           </Text>
 
-          <View style={styles.heroMetaRow}>
-            <View style={styles.statusPill}>
-              <Text style={styles.statusText}>{model.header.status}</Text>
-            </View>
+          {model?.jo_date_promulgation ? (
+  <View style={{ marginTop: 8 }}>
+    <LoiPromulgationBlock datePromulgation={model.jo_date_promulgation} />
+  </View>
+) : null}
 
-            <Text style={styles.heroMeta}>
-              {model.header.lastStepLabel} • {model.header.lastStepDate}
-            </Text>
-          </View>
+
+          <View style={styles.heroMetaRow}>
+  <View style={styles.statusPill}>
+  <Text style={styles.statusText}>Statut : {model.header.status}</Text>
+</View>
+
+  {/* ✅ Facts lisibles : Vote vs JO */}
+  <View style={styles.factsCol}>
+    <Text style={styles.factLine}>
+      <Text style={styles.factK}>Vote final à l’Assemblée :</Text>{" "}
+      {model.header.lastStepDate !== "—" ? model.header.lastStepDate : "—"}
+    </Text>
+
+    {model?.jo_date_promulgation ? (
+      <Text style={styles.factLine}>
+        <Text style={styles.factK}>Promulgation (JO) :</Text>{" "}
+        {fmtDateFR(model.jo_date_promulgation)}
+      </Text>
+    ) : null}
+  </View>
+</View>
+
+
 
           <Text style={styles.heroOneLiner} numberOfLines={2}>
             {model.header.oneLiner}
@@ -1402,51 +1796,50 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
                   </View>
                 ))
               ) : (
-                timelineSections.map((sec) => (
-                  <View key={`sec-${sec.yearLabel}`} style={{ gap: 10 }}>
-                    <View style={styles.yearHeader}>
-                      <Text style={styles.yearTitle}>{sec.yearLabel}</Text>
-                      <Text style={styles.yearCount}>{sec.items.length}</Text>
+                timelineSections.map((sec) => {
+                  const year = String(sec.yearLabel ?? "").trim();
+                  const g = (timelineSectionsNice as any)[year] ?? {
+                    final: [],
+                    articles: [],
+                    amendements: [],
+                  };
+
+                  return (
+                    <View key={`sec-${sec.yearLabel}`} style={{ gap: 10 }}>
+                      <View style={styles.yearHeader}>
+                        <Text style={styles.yearTitle}>{sec.yearLabel}</Text>
+                        <Text style={styles.yearCount}>{sec.items.length}</Text>
+                      </View>
+
+                      {!!g.final.length && (
+                        <>
+                          <Text style={styles.timelineSubhead}>Vote final</Text>
+                          {g.final.map((r: LoiTimelineRow, idx: number) =>
+                            renderTimelineRow(r, idx, `final-${year}`)
+                          )}
+                        </>
+                      )}
+
+                      {!!g.articles.length && (
+                        <>
+                          <Text style={styles.timelineSubhead}>Articles</Text>
+                          {g.articles.map((r: LoiTimelineRow, idx: number) =>
+                            renderTimelineRow(r, idx, `articles-${year}`)
+                          )}
+                        </>
+                      )}
+
+                      {!!g.amendements.length && (
+                        <>
+                          <Text style={styles.timelineSubhead}>Autres votes</Text>
+                          {g.amendements.map((r: LoiTimelineRow, idx: number) =>
+                            renderTimelineRow(r, idx, `amend-${year}`)
+                          )}
+                        </>
+                      )}
                     </View>
-
-                    {sec.items.map((r, idx) => {
-                      const sid = r.numero_scrutin ? String(r.numero_scrutin) : "";
-                      const label = (r.titre ?? "").trim() || "Étape";
-                      const date = fmtDateFR(r.date_scrutin);
-                      const result = (r.resultat ?? "").trim() || "";
-
-                      return (
-                        <View
-                          key={`${sec.yearLabel}-${sid || idx}`}
-                          style={styles.timelineRow}
-                        >
-                          <View style={styles.timelineLeft}>
-                            <View style={styles.timelineDot} />
-                          </View>
-
-                          <View style={{ flex: 1, gap: 4 }}>
-                            <Text style={styles.timelineLabel}>{label}</Text>
-                            <Text style={styles.muted}>
-                              {(date ?? "—") + (result ? ` • ${result}` : "")}
-                            </Text>
-
-                            {sid ? (
-                              <View style={styles.proofRow}>
-                                <ProofLink
-                                  p={{
-                                    label: `Voir scrutin ${sid}`,
-                                    href: `/scrutins/${encodeURIComponent(sid)}`,
-                                  }}
-                                  onPress={openHref}
-                                />
-                              </View>
-                            ) : null}
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
-                ))
+                  );
+                })
               )}
             </View>
           </View>
@@ -1460,7 +1853,9 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
               subtitle="Résultats par scrutin — puis détail par groupes"
               right={
                 voteScrutinIds.length ? (
-                  <Text style={styles.muted}>{voteScrutinIds.length} scrutin(s)</Text>
+                  <Text style={styles.muted}>
+                    {voteScrutinIds.length} scrutin(s)
+                  </Text>
                 ) : null
               }
             />
@@ -1471,34 +1866,66 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
               </Text>
             ) : (
               <View style={{ gap: 10 }}>
-                {voteScrutinIds.map((sid, idx) => {
+                {voteScrutinIds.map((sid: string, idx: number) => {
                   const rows = (votesByScrutin as any)?.[sid] ?? [];
-                  const g = globalFromGroups(rows);
-                  const total = g.pour + g.contre + g.abstention;
+                  const tot = (totauxByScrutin as any)?.[sid] ?? null;
+
+                  // ✅ fallback ultime = scrutins_data (source fiable, déjà validée par la fiche Scrutin)
+                  let g =
+                    tot && ((tot as any).nb_pour ?? 0) + ((tot as any).nb_contre ?? 0) > 0
+                      ? {
+                          pour: Number((tot as any).nb_pour ?? 0),
+                          contre: Number((tot as any).nb_contre ?? 0),
+                          abstention: Number((tot as any).nb_abstention ?? 0),
+                        }
+                      : globalFromGroups(rows);
+
+                  // ✅ dernier filet de sécurité : si encore 0, lire scrutins_data déjà chargée ailleurs
+                  if (g.pour + g.contre + g.abstention === 0) {
+                    const sd = (scrutinsDataByNumero as any)?.[sid];
+                    if (sd) {
+                      g = {
+                        pour: Number(sd.nb_pour ?? sd.pour ?? 0),
+                        contre: Number(sd.nb_contre ?? sd.contre ?? 0),
+                        abstention: Number(sd.nb_abstention ?? sd.abstention ?? 0),
+                      };
+                    }
+                  }
+
+                  const totalExprimes = g.pour + g.contre + g.abstention;
+
+                  console.log("[CHECK TOT]", {
+                    sid,
+                    totKeys: tot ? Object.keys(tot) : null,
+                    tot,
+                    firstRow: rows?.[0] ?? null,
+                  });
+
+                  // (optionnel) participation si DB fournit nb_total_votes & nb_non_votants
+                  const participation =
+                    tot && tot.nb_total_votes != null && tot.nb_non_votants != null
+                      ? Number(tot.nb_total_votes) - Number(tot.nb_non_votants)
+                      : null;
 
                   return (
                     <Fold
                       key={`vote-${sid}`}
                       title={`Scrutin ${sid}`}
-                      subtitle={`Global: ${g.pour} pour • ${g.contre} contre • ${g.abstention} abst. (${total} exprimés)`}
+                      subtitle={`Global: ${g.pour} pour • ${g.contre} contre • ${g.abstention} abst. (${totalExprimes} exprimés)`}
                       defaultOpen={idx === 0}
                     >
                       <View style={{ gap: 6, marginBottom: 8 }}>
                         <Text style={styles.muted}>
-                          Pour: {g.pour} ({fmtPct(g.pour, total)}) • Contre: {g.contre} (
-                          {fmtPct(g.contre, total)}) • Abst.: {g.abstention} (
-                          {fmtPct(g.abstention, total)})
+                          Pour: {g.pour} ({fmtPct(g.pour, totalExprimes)}) • Contre:{" "}
+                          {g.contre} ({fmtPct(g.contre, totalExprimes)}) • Abst.:{" "}
+                          {g.abstention} ({fmtPct(g.abstention, totalExprimes)})
                         </Text>
 
                         <Pressable
-                          onPress={() =>
-                            openHref(`/scrutins/${encodeURIComponent(sid)}`)
-                          }
+                          onPress={() => openHref(`/scrutins/${encodeURIComponent(sid)}`)}
                           style={styles.sourceRow}
                         >
-                          <Text style={styles.sourceLabel}>
-                            Voir le détail du scrutin →
-                          </Text>
+                          <Text style={styles.sourceLabel}>Voir le détail du scrutin →</Text>
                           <Text style={styles.chev}>→</Text>
                         </Pressable>
                       </View>
@@ -1506,23 +1933,23 @@ if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
                       <View style={{ gap: 8 }}>
                         {rows.slice(0, 12).map((r: VoteGroupeRow, j: number) => {
                           const label = (r.groupe_label || r.groupe || "Groupe").trim();
-                          const t =
-                            (r.pour ?? 0) + (r.contre ?? 0) + (r.abstention ?? 0);
-                          const pos = String((r as any)?.position_majoritaire ?? "")
+                          const c = countsFromAnyVoteRow(r);
+                          const t = c.pour + c.contre + c.abstention;
+
+                          const pos = String(
+                            (r as any)?.position_majoritaire ?? (r as any)?.position ?? ""
+                          )
                             .trim()
                             .toUpperCase();
 
                           return (
-                            <View
-                              key={`g-${sid}-${label}-${j}`}
-                              style={styles.voteGroupRow}
-                            >
+                            <View key={`g-${sid}-${label}-${j}`} style={styles.voteGroupRow}>
                               <Text style={styles.voteGroupTitle}>
                                 {label}
                                 {pos ? ` — ${pos}` : ""}
                               </Text>
                               <Text style={styles.muted}>
-                                {r.pour} pour • {r.contre} contre • {r.abstention} abst.
+                                {c.pour} pour • {c.contre} contre • {c.abstention} abst.
                                 (total {t})
                               </Text>
                             </View>
@@ -1637,7 +2064,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
   },
-  statusText: { color: INK, fontSize: 11, fontWeight: "900" },
+  statusText: { color: INK, fontSize: 11, fontWeight: "800" },
   heroMeta: { color: INK_SOFT, fontSize: 12, fontWeight: "800" },
   heroOneLiner: {
     color: INK_SOFT,
@@ -1747,6 +2174,24 @@ const styles = StyleSheet.create({
   },
   timelineLabel: { color: INK, fontSize: 13, fontWeight: "900" },
 
+  // ✅ NEW: sous-ligne meta (kind/result/date)
+  timelineMeta: {
+    color: INK_SOFT,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+    opacity: 0.9,
+  },
+
+  // ✅ NEW: sous-titres de section (Vote final / Articles / Amendements)
+  timelineSubhead: {
+    color: INK,
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+    marginTop: 2,
+  },
+
   proofRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1805,4 +2250,20 @@ const styles = StyleSheet.create({
   },
   sourceLabel: { color: INK, fontSize: 12, fontWeight: "900" },
   chev: { color: INK, fontSize: 18, fontWeight: "900" },
+factsCol: {
+  flex: 1,
+  gap: 4,
+  paddingLeft: 2,
+},
+factLine: {
+  color: INK_SOFT,
+  fontSize: 12,
+  lineHeight: 16,
+  fontWeight: "800",
+},
+factK: {
+  color: INK,
+  fontWeight: "900",
+},
+
 });

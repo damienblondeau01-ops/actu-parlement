@@ -58,6 +58,17 @@ const LOI_SELECT_NO_RESUME = `
   date_dernier_scrutin
 `;
 
+export type LoiJOStatusRow = {
+  loi_id: string;
+  date_promulgation: string | null; // date
+  date_publication_jo: string | null; // date
+  date_entree_vigueur: string | null; // date
+  url_promulgation: string | null;
+  url_publication_jo: string | null;
+  url_entree_vigueur: string | null;
+  source_label_promulgation: string | null;
+};
+
 export async function fetchLoisList(limit = 200) {
   const r1 = await fromSafe(DB_VIEWS.LOIS_APP)
     .select(LOI_SELECT_WITH_RESUME)
@@ -206,6 +217,14 @@ export async function fetchLoiDetail(loiId: string) {
     }
   }
 
+const { data: jo, error: joErr } = await fromSafe(DB_VIEWS.LOI_JO_STATUS)
+  .select("*")
+  .eq("loi_id", loiId)
+  .maybeSingle();
+
+const joStatus = (joErr ? null : (jo as any)) as LoiJOStatusRow | null;
+
+  
   /**
    * ✅ RESOLVER :
    * si on reçoit un canonKey "loi:..." et que LOIS_APP ne renvoie rien,
@@ -262,6 +281,11 @@ export type LoiTimelineRow = {
   kind: string | null;
   article_ref: string | null;
   legislature?: number | null;
+  kind_label?: string | null;
+  result_short?: string | null;
+  is_final?: boolean | null;
+  article_num?: number | null;
+  scrutin_label_short?: string | null;
 };
 
 // ✅ vue canon (si DB_VIEWS n'a pas la clé, on force le nom)
@@ -306,7 +330,7 @@ export async function fetchLoiTimelineCanon(canonKey: string, limit = 500) {
 }
 
 const TIMELINE_SELECT = `
-  loi_id,
+   loi_id,
   numero_scrutin,
   date_scrutin,
   titre,
@@ -314,7 +338,12 @@ const TIMELINE_SELECT = `
   resultat,
   kind,
   article_ref,
-  legislature
+  legislature,
+  kind_label,
+  result_short,
+  is_final,
+  article_num,
+  scrutin_label_short
 `;
 
 // ✅ select fallback unified SANS legislature (car tu as l’erreur “legislature does not exist”)
@@ -418,11 +447,58 @@ export async function fetchLoiTimeline(loiId: string, limit = 500) {
       error?.message ?? null
     );
 
-    if (error) throw error;
+    /**
+     * ✅ IMPORTANT (anti-régression) :
+     * si la vue existe mais que certaines colonnes manquent (kind_label, etc.),
+     * on ne throw pas : on refait un select minimal.
+     */
+    if (error) {
+      if (!isMissingColumnError(error)) throw error;
 
-    const rows = (data ?? []) as LoiTimelineRow[];
-    if (rows.length > 0) return rows;
-    // si 0, on continue vers les fallbacks ci-dessous
+      console.log(
+        "[fetchLoiTimeline] missing column in scrutins_par_loi_app -> fallback minimal:",
+        error?.message ?? error
+      );
+
+      const { data: dataMin, error: errMin } = await fromSafe(
+        DB_VIEWS.SCRUTINS_PAR_LOI_APP as any
+      )
+        .select(
+          `
+          loi_id,
+          numero_scrutin,
+          date_scrutin,
+          titre,
+          objet,
+          resultat,
+          kind,
+          article_ref,
+          legislature
+        `
+        )
+        .eq("loi_id", id)
+        .order("date_scrutin", { ascending: false })
+        .order("numero_scrutin", { ascending: false })
+        .limit(limit);
+
+      console.log(
+        "[fetchLoiTimeline][scrutins_par_loi_app|min] loi_id =",
+        id,
+        "| got =",
+        (dataMin ?? []).length,
+        "| error =",
+        errMin?.message ?? null
+      );
+
+      if (errMin) throw errMin;
+
+      const rowsMin = (dataMin ?? []) as LoiTimelineRow[];
+      if (rowsMin.length > 0) return rowsMin;
+    } else {
+      const rows = (data ?? []) as LoiTimelineRow[];
+      if (rows.length > 0) return rows;
+      // si 0, on continue vers les fallbacks ci-dessous
+    }
   }
 
   /**
@@ -475,6 +551,93 @@ export async function fetchLoiTimeline(loiId: string, limit = 500) {
     })) as LoiTimelineRow[];
   }
 
+  /**
+   * ✅ NEW (B) : fetch scrutins_data via group_key IN (ordinaire + solennel)
+   * -> permet de récupérer les votes solennels (4947 / 525) en plus des ordinaires.
+   */
+  function buildGroupKeyVariants(gk: string): string[] {
+    const s = String(gk ?? "").trim();
+    if (!s) return [];
+    const out = new Set<string>();
+    out.add(s);
+
+    // si l’un est présent, on génère l’autre
+    if (s.includes("scrutin-public-ordinaire-")) {
+      out.add(s.replace("scrutin-public-ordinaire-", "scrutin-public-solennel-"));
+    }
+    if (s.includes("scrutin-public-solennel-")) {
+      out.add(s.replace("scrutin-public-solennel-", "scrutin-public-ordinaire-"));
+    }
+
+    return Array.from(out).filter(Boolean);
+  }
+
+  async function fetchFromScrutinsDataByGroupKeys(
+    groupKeys: string[],
+    attachLoiId: string
+  ): Promise<LoiTimelineRow[]> {
+    const keys = (groupKeys ?? []).map((x) => String(x ?? "").trim()).filter(Boolean);
+    if (keys.length === 0) return [];
+
+    const { data, error } = await fromSafe(VIEW_SCRUTINS_DATA_LOCAL as any)
+      .select(
+        `
+        numero,
+        date_scrutin,
+        titre,
+        objet,
+        resultat,
+        kind,
+        article_ref,
+        legislature,
+        group_key
+      `
+      )
+      .in("group_key", keys)
+      .order("date_scrutin", { ascending: false })
+      .order("numero", { ascending: false })
+      .limit(limit);
+
+    console.log(
+      "[fetchLoiTimeline][scrutins_data|group_key IN] keys =",
+      keys.join(" | "),
+      "| got =",
+      (data ?? []).length,
+      "| error =",
+      error?.message ?? null
+    );
+
+    if (error) throw error;
+
+    return (data ?? []).map((r: any) => ({
+      loi_id: attachLoiId, // ✅ on rattache au canon id (loi:...)
+      numero_scrutin: String(r.numero ?? ""),
+      date_scrutin: r.date_scrutin ?? null,
+      titre: r.titre ?? null,
+      objet: r.objet ?? null,
+      resultat: r.resultat ?? null,
+      kind: r.kind ?? null,
+      article_ref: r.article_ref ?? null,
+      legislature: r.legislature ?? null,
+    })) as LoiTimelineRow[];
+  }
+
+  async function fetchGroupKeyFromScrutinsData(slug: string): Promise<string | null> {
+    const s = String(slug ?? "").trim();
+    if (!s) return null;
+
+    const { data, error } = await fromSafe(VIEW_SCRUTINS_DATA_LOCAL as any)
+      .select("group_key")
+      .eq("loi_id", s)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) return null;
+
+    const gk = String((data as any)?.group_key ?? "").trim();
+    return gk || null;
+  }
+
   // 1) slug direct -> scrutins_data
   if (id.startsWith("scrutin-")) {
     return await fetchFromScrutinsData(id);
@@ -483,60 +646,57 @@ export async function fetchLoiTimeline(loiId: string, limit = 500) {
   // 2) canonKey "loi:..." -> resolve slug -> scrutins_data
   if (id.startsWith("loi:")) {
     const dossierId = await resolveDossierIdFromCanonKey(id);
+
+    // ✅ Si on a un slug scrutin-... : on tente d’abord group_key IN (ordinaire+solennel)
     if (dossierId && dossierId.startsWith("scrutin-")) {
+      const gk = await fetchGroupKeyFromScrutinsData(dossierId);
+      const variants = buildGroupKeyVariants(gk || "");
+
+      if (variants.length > 0) {
+        const merged = await fetchFromScrutinsDataByGroupKeys(variants, id);
+        if (merged.length > 0) return merged;
+      }
+
+      // 🔒 fallback strict (ancien comportement) si group_key absent
       const rows = await fetchFromScrutinsData(dossierId);
       return rows.map((r) => ({ ...r, loi_id: id })) as LoiTimelineRow[];
     }
 
     // 3) fallback ultimate : unified
     let alt: any[] | null = null;
-let eAlt: any = null;
+    let eAlt: any = null;
 
-// 1) tentative avec dossier_id (si colonne existe)
-{
-  const r1 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
-    .select(UNIFIED_TIMELINE_SELECT_WITH_DOSSIER)
-    .or(`loi_id_canon.eq.${id},loi_id_scrutin.eq.${id}`)
-    .order("date_scrutin", { ascending: false })
-    .limit(limit);
+    // 1) tentative avec dossier_id (si colonne existe)
+    {
+      const r1 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
+        .select(UNIFIED_TIMELINE_SELECT_WITH_DOSSIER)
+        .or(`loi_id_canon.eq.${id},loi_id_scrutin.eq.${id}`)
+        .order("date_scrutin", { ascending: false })
+        .limit(limit);
 
-  if (!r1.error) {
-    alt = (r1.data ?? []) as any[];
-  } else if (isMissingColumnError(r1.error)) {
-    // 2) fallback sans dossier_id
-    const r2 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
-      .select(UNIFIED_TIMELINE_SELECT_NO_LEGISLATURE)
-      .or(`loi_id_canon.eq.${id},loi_id_scrutin.eq.${id}`)
-      .order("date_scrutin", { ascending: false })
-      .limit(limit);
+      if (!r1.error) {
+        alt = (r1.data ?? []) as any[];
+      } else if (isMissingColumnError(r1.error)) {
+        // 2) fallback sans dossier_id
+        const r2 = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
+          .select(UNIFIED_TIMELINE_SELECT_NO_LEGISLATURE)
+          .or(`loi_id_canon.eq.${id},loi_id_scrutin.eq.${id}`)
+          .order("date_scrutin", { ascending: false })
+          .limit(limit);
 
-    alt = (r2.data ?? []) as any[];
-    eAlt = r2.error;
-  } else {
-    eAlt = r1.error;
-  }
-}
+        alt = (r2.data ?? []) as any[];
+        eAlt = r2.error;
+      } else {
+        eAlt = r1.error;
+      }
+    }
 
-console.log(
-  "[fetchLoiTimeline][fallback-unified] got =",
-  (alt ?? []).length,
-  "| error =",
-  eAlt?.message ?? null
-);
-
-if (!eAlt && Array.isArray(alt) && alt.length > 0) {
-  return alt.map((r: any) => ({
-    loi_id: id,
-    numero_scrutin: String(r.numero_scrutin ?? ""),
-    date_scrutin: r.date_scrutin ?? null,
-    titre: r.titre ?? null,
-    objet: r.objet ?? null,
-    resultat: r.resultat ?? null,
-    kind: r.kind ?? null,
-    article_ref: r.article_ref ?? null,
-    legislature: undefined,
-  })) as LoiTimelineRow[];
-}
+    console.log(
+      "[fetchLoiTimeline][fallback-unified] got =",
+      (alt ?? []).length,
+      "| error =",
+      eAlt?.message ?? null
+    );
 
     if (!eAlt && Array.isArray(alt) && alt.length > 0) {
       return alt.map((r: any) => ({
@@ -593,7 +753,6 @@ export async function fetchLoiSources(loiId: string): Promise<LoiSourceItem[]> {
   return (data ?? []).filter((x: any) => x?.url && x?.label) as LoiSourceItem[];
 }
 
-
 /**
  * ==========================
  *  TEXTE (DB-first)
@@ -634,7 +793,6 @@ export async function fetchLoiTexte(loiId: string): Promise<LoiTexteRow | null> 
 
   return (data ?? null) as LoiTexteRow | null;
 }
-
 
 /**
  * ==========================
@@ -677,6 +835,52 @@ export async function fetchScrutinTotaux(scrutinId: string) {
 
   return pick<ScrutinTotauxRow | null>(data);
 }
+
+export async function fetchScrutinTotauxForScrutins(ids: string[]) {
+  const clean = (ids ?? [])
+    .map((x) => String(x ?? "").trim())
+    .filter(Boolean);
+
+  if (clean.length === 0) return [];
+
+  const nums = clean
+    .map((s) => Number(String(s).replace(/\D+/g, "")))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  if (nums.length === 0) return [];
+
+  const idsScrutin = nums.map((n) => `scrutin-${n}`);
+
+  // ⚠️ IMPORTANT: garde ta source réelle si ce n'est pas "scrutins_totaux"
+  const FROM = "scrutins_totaux" as any;
+
+  // 1) numero_scrutin
+  try {
+    const { data, error } = await fromSafe(FROM)
+      .select("*")
+      .in("numero_scrutin", nums);
+
+    if (!error && (data?.length ?? 0) > 0) return data ?? [];
+  } catch {}
+
+  // 2) numero
+  try {
+    const { data, error } = await fromSafe(FROM).select("*").in("numero", nums);
+    if (!error && (data?.length ?? 0) > 0) return data ?? [];
+  } catch {}
+
+  // 3) scrutin_id
+  try {
+    const { data, error } = await fromSafe(FROM)
+      .select("*")
+      .in("scrutin_id", idsScrutin);
+
+    if (!error && (data?.length ?? 0) > 0) return data ?? [];
+  } catch {}
+
+  return [];
+}
+
 
 /**
  * ============================================
@@ -929,3 +1133,4 @@ export async function fetchScrutinAvecVotesByAnyId(idOrSlug: string) {
 
   return { scrutin, totaux };
 }
+
