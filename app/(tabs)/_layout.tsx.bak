@@ -154,7 +154,16 @@ function TabsInner() {
         <Tabs.Screen name="stats-groupes" options={{ href: null }} />
 
         {/* cache tabbar sur détails */}
-</Tabs>
+        <Tabs.Screen name="lois/[id]" options={{ href: null, tabBarStyle: { display: "none" } }} />
+        <Tabs.Screen
+          name="deputes/[id]"
+          options={{ href: null, tabBarStyle: { display: "none" } }}
+        />
+        <Tabs.Screen
+          name="scrutins/[id]"
+          options={{ href: null, tabBarStyle: { display: "none" } }}
+        />
+      </Tabs>
 
       {/* ✅ ICI le MASQUE : au-dessus des écrans (donc cache la liste dessous),
           mais en dessous de la tabbar (zIndex 10 vs tabbar zIndex 20) */}
@@ -192,4 +201,3 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
 });
-

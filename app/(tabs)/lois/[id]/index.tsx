@@ -30,7 +30,8 @@ import {
   fetchLoiTimelineCanon,
   fetchLoiSources,
   fetchLoiTexte,
-  fetchScrutinTotauxForScrutins, // ✅ NEW
+  fetchScrutinTotauxForScrutins, // ✅ NEW (pas utilisé ici mais on ne touche pas)
+  fetchLoiProcedureCanon,
 } from "../../../../lib/queries/lois";
 import type {
   LoiTimelineRow,
@@ -48,9 +49,6 @@ import { generateEnClairV1 } from "@/lib/ai/enClair";
 import type { EnClairItem } from "@/lib/ai/types";
 import { supabase } from "@/lib/supabaseClient";
 import LoiPromulgationBlock from "@/components/loi/LoiPromulgationBlock";
-import { fetchLoiProcedure, type LoiProcedureStep } from "@/lib/queries/procedure";
-
-
 
 // ✅ Votes (V0) — par scrutin / par groupes
 import {
@@ -78,7 +76,6 @@ type RouteParams = {
 
   // ✅ JO (source externe propagée depuis Actu)
   jo?: string;
-
 
   // provenance
   fromKey?: string;
@@ -170,7 +167,7 @@ type CanonImpactCard = {
   proof?: CanonProof;
 };
 
-type CanonTimelineStep = {
+type CanonTimelineStepUI = {
   label: string;
   date?: string;
   result?: string;
@@ -208,11 +205,28 @@ type CanonModel = {
   tldr: CanonTLDRBullet[];
   context?: CanonContext;
   impact?: CanonImpactCard[];
-  timeline: CanonTimelineStep[];
+  timeline: CanonTimelineStepUI[];
   votes?: CanonVotes;
   measures?: CanonMeasures;
   jo_date_promulgation?: string | null;
   sources: CanonSources;
+};
+
+/** =========================
+ *  ✅ TYPE PROCÉDURE (Dossier AN/Sénat)
+ *  ✅ Fix TS: on n’utilise PAS CanonTimelineStep importé (mauvais shape)
+ *  -> on type local = exactement ce que le rendu utilise
+ *  ========================= */
+type ProcedureTimelineStep = {
+  label: string;
+  chambre?: string | null;
+  lecture?: string | number | null;
+  date_start?: string | null;
+
+  source_url?: string | null;
+  source_label?: string | null;
+
+  step_index?: number | null;
 };
 
 /** =========================
@@ -522,14 +536,13 @@ export default function LoiDetailCanonScreen() {
     return "";
   }, [params]);
 
-    const joParam = useMemo(() => {
-  // ✅ Actu envoie "joParam"
-  const v = (params as any)?.joParam ?? (params as any)?.jo; // fallback ancien
-  if (typeof v === "string") return v.trim();
-  if (Array.isArray(v)) return String(v[0] ?? "").trim();
-  return "";
-}, [params]);
-
+  const joParam = useMemo(() => {
+    // ✅ Actu envoie "joParam"
+    const v = (params as any)?.joParam ?? (params as any)?.jo; // fallback ancien
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return String(v[0] ?? "").trim();
+    return "";
+  }, [params]);
 
   const restoreId = useMemo(() => {
     const v = (params as any)?.restoreId;
@@ -585,7 +598,9 @@ export default function LoiDetailCanonScreen() {
   const [loiTexte, setLoiTexte] = useState<LoiTexteRow | null>(null);
   const [enClair, setEnClair] = useState<EnClairItem[]>([]);
 
-  const [procedureSteps, setProcedureSteps] = useState<LoiProcedureStep[]>([]);
+  const [procedureTimeline, setProcedureTimeline] = useState<
+    ProcedureTimelineStep[]
+  >([]);
 
   // ✅ Votes (V0): par scrutin -> par groupes
   const [votesByScrutin, setVotesByScrutin] = useState<
@@ -650,27 +665,6 @@ export default function LoiDetailCanonScreen() {
     [router]
   );
 
-  useEffect(() => {
-    console.log("[LOI][PROMULGATION CHECK]", {
-  joParam: joParam || null,
-  model_has: Object.prototype.hasOwnProperty.call(
-    (model as any) ?? {},
-    "jo_date_promulgation"
-  ),
-  model_jo: (model as any)?.jo_date_promulgation ?? null,
-});
-  }, [
-    id,
-    canonKey,
-    lockedHeroTitle,
-    seedScrutin,
-    fromKey,
-    fromLabel,
-    loiKey,
-    timelineQueryKey,
-  joParam,
-  ]);
-
   /**
    * ✅ RESET propre sur changement d'ID (évite “flash”)
    */
@@ -685,11 +679,10 @@ export default function LoiDetailCanonScreen() {
     setEnClair([]);
     setVotesByScrutin({});
     setTotauxByScrutin({});
-    setProcedureSteps([]);
+    setProcedureTimeline([]);
     // ✅ reset fallback scrutins_data (sinon valeurs “fantômes” entre 2 lois)
     setScrutinsDataByNumero({});
   }, [id]);
-
 
   // ✅ Load minimal: title + timeline
   useEffect(() => {
@@ -706,7 +699,7 @@ export default function LoiDetailCanonScreen() {
           setLoading(false);
           return;
         }
-        
+
         const loi = await fetchLoiDetail(loiKey);
 
         const dbTitle = ((loi as any)?.titre_loi ?? null) as string | null;
@@ -794,9 +787,14 @@ export default function LoiDetailCanonScreen() {
               // 3) keys uniques (inclut aussi les versions réparées au cas où)
               const keys = Array.from(
                 new Set(
-                  [gkRaw, gk, gkOrd, gkSol, fixTail(gkOrd), fixTail(gkSol)].filter(
-                    Boolean
-                  )
+                  [
+                    gkRaw,
+                    gk,
+                    gkOrd,
+                    gkSol,
+                    fixTail(gkOrd),
+                    fixTail(gkSol),
+                  ].filter(Boolean)
                 )
               );
 
@@ -860,8 +858,6 @@ export default function LoiDetailCanonScreen() {
         setLoiTitle(computedTitle);
         setTimelineRows(rows);
 
-        
-
         console.log("[LOI SCREEN] id =", id);
         console.log("[LOI SCREEN] loiKey =", loiKey);
         console.log("[LOI SCREEN] timelineQueryKey =", timelineQueryKey);
@@ -878,8 +874,6 @@ export default function LoiDetailCanonScreen() {
         setLoading(false);
       }
     })();
-
-    
 
     return () => {
       alive = false;
@@ -912,12 +906,15 @@ export default function LoiDetailCanonScreen() {
         const idsTop = ids;
 
         let rows: any[] = [];
-try {
-  rows = await fetchVotesGroupesForScrutins(idsTop);
-} catch (e) {
-  console.log("[LOI VOTES] fetchVotesGroupesForScrutins failed =", (e as any)?.message ?? e);
-  rows = [];
-}
+        try {
+          rows = await fetchVotesGroupesForScrutins(idsTop);
+        } catch (e) {
+          console.log(
+            "[LOI VOTES] fetchVotesGroupesForScrutins failed =",
+            (e as any)?.message ?? e
+          );
+          rows = [];
+        }
 
         // ✅ Totaux globaux : source fiable = scrutins_data (comme l'écran Scrutin)
         const numsTop = idsTop
@@ -963,7 +960,8 @@ try {
             totMap[sid] = {
               nb_pour: (t as any)?.nb_pour ?? (t as any)?.pour ?? 0,
               nb_contre: (t as any)?.nb_contre ?? (t as any)?.contre ?? 0,
-              nb_abstention: (t as any)?.nb_abstention ?? (t as any)?.abstention ?? 0,
+              nb_abstention:
+                (t as any)?.nb_abstention ?? (t as any)?.abstention ?? 0,
               nb_non_votants:
                 (t as any)?.nb_non_votants ?? (t as any)?.non_votants ?? null,
               nb_total_votes:
@@ -998,7 +996,6 @@ try {
         setTotauxByScrutin(totMap);
 
         // ✅ 2) scrutinsDataByNumero = filet de sécurité utilisé dans le render si besoin
-        // (avant: tu lisais scrutinsDataByNumero mais tu ne le remplissais jamais)
         setScrutinsDataByNumero(totMap);
       } catch (e) {
         if (!alive) return;
@@ -1014,33 +1011,50 @@ try {
     };
   }, [timelineRows]);
 
-useEffect(() => {
-  let alive = true;
+  // ✅ Load Procédure (dossier) — canon
+  useEffect(() => {
+    let alive = true;
 
-  (async () => {
-    try {
-      if (!loiKey) {
+    (async () => {
+      try {
+        if (!loiKey) {
+          if (!alive) return;
+          setProcedureTimeline([]);
+          return;
+        }
+
+        const steps = await fetchLoiProcedureCanon(
+  String(loiKey).trim(),
+  joParam ?? null,
+  200
+);
+
+console.log(
+  "[PROC] steps",
+  Array.isArray(steps)
+    ? steps.map((s: any) => ({
+        idx: s?.step_index,
+        label: s?.label,
+        chambre: s?.chambre,
+        lecture: s?.lecture,
+        date: s?.date_start,
+      }))
+    : steps
+);
+
+if (!alive) return;
+setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
+      } catch (e) {
         if (!alive) return;
-        setProcedureSteps([]);
-        return;
+        console.log("[LOI PROCEDURE CANON] error =", (e as any)?.message ?? e);
+        setProcedureTimeline([]);
       }
+    })();
 
-      // ✅ IMPORTANT: on requête avec la clé canon "loi:..."
-      const rows = await fetchLoiProcedure(String(loiKey).trim());
-      if (!alive) return;
-      setProcedureSteps(rows ?? []);
-    } catch (e) {
-      if (!alive) return;
-      console.log("[LOI PROCEDURE] error =", (e as any)?.message ?? e);
-      setProcedureSteps([]);
-    }
-  })();
-
-  return () => {
-    alive = false;
-  };
-}, [loiKey]);
-
+    return () => {
+      alive = false;
+    };
+  }, [loiKey, joParam]);
 
   // ✅ Load DB-first: sources + texte (isolé, zéro impact timeline)
   useEffect(() => {
@@ -1056,30 +1070,28 @@ useEffect(() => {
 
       // ✅ on essaie d’abord avec loiKey (canonKey si dispo), sinon id
       const keyPrimary =
-  String(loiKey ?? "").trim() ||
-  (canonKey?.startsWith("loi:") ? canonKey.trim() : "") ||
-  canonFromSlug(String(id ?? "")) ||
-  String(id).trim();
+        String(loiKey ?? "").trim() ||
+        (canonKey?.startsWith("loi:") ? canonKey.trim() : "") ||
+        canonFromSlug(String(id ?? "")) ||
+        String(id).trim();
 
-// ✅ fallback explicite (anti-TS)
-const keyFallback = String(id).trim();
+      // ✅ fallback explicite (anti-TS)
+      const keyFallback = String(id).trim();
 
-console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
+      console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
 
       try {
         const s1 = await fetchLoiSources(keyPrimary);
         const s = (s1?.length ? s1 : await fetchLoiSources(keyFallback)) as any[];
         console.log("[LOI SOURCES] fetched =", {
-  n1: s1?.length ?? 0,
-  n: s?.length ?? 0,
-  first: (s ?? [])[0] ?? null,
-});
+          n1: s1?.length ?? 0,
+          n: s?.length ?? 0,
+          first: (s ?? [])[0] ?? null,
+        });
         if (!alive) return;
-        // ✅ important: on garde en state le format LoiSourceItem (UI)
-        setSources(toLoiSourcesUI(s) ?? []);
+
         const ui = toLoiSourcesUI(s) ?? [];
         console.log("[LOI SOURCES] ui =", { n: ui.length, first: ui[0] ?? null });
-          if (!alive) return;
         setSources(ui);
       } catch (e) {
         if (!alive) return;
@@ -1104,7 +1116,7 @@ console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
     return () => {
       alive = false;
     };
-  }, [id, loiKey]);
+  }, [id, loiKey, canonKey]);
 
   // ✅ IA “En clair” V1 (preuves obligatoires : sources)
   useEffect(() => {
@@ -1284,7 +1296,8 @@ console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
 
   function countsFromAnyVoteRow(r: any) {
     // 1) ✅ format pivot: pour/contre/abstention
-    const hasPivot = r && (r.pour != null || r.contre != null || r.abstention != null);
+    const hasPivot =
+      r && (r.pour != null || r.contre != null || r.abstention != null);
 
     if (hasPivot) {
       const pour = Number(r.pour ?? 0);
@@ -1301,14 +1314,18 @@ console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
     // 2) ✅ variantes courantes: nb_pour/nb_contre/nb_abstention
     const np = Number((r as any)?.nb_pour ?? (r as any)?.voix_pour ?? 0);
     const nc = Number((r as any)?.nb_contre ?? (r as any)?.voix_contre ?? 0);
-    const na = Number((r as any)?.nb_abstention ?? (r as any)?.voix_abstention ?? 0);
+    const na = Number(
+      (r as any)?.nb_abstention ?? (r as any)?.voix_abstention ?? 0
+    );
 
     if (np + nc + na > 0) {
       return { pour: np, contre: nc, abstention: na };
     }
 
     // 3) ✅ long format: une ligne = une position + nb_voix
-    const nb = Number((r as any)?.nb_voix ?? (r as any)?.nb ?? (r as any)?.count ?? 0);
+    const nb = Number(
+      (r as any)?.nb_voix ?? (r as any)?.nb ?? (r as any)?.count ?? 0
+    );
 
     const posRaw = String(
       (r as any)?.position ??
@@ -1405,13 +1422,14 @@ console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
     } catch {
       header = fallbackHeader;
     }
-    // ✅ Règle simple & sûre : si JO connu -> loi promulguée
-if (joParam) {
-  header = { ...header, status: "—" };
-}
+
+    // ✅ Règle simple & sûre : si JO connu -> loi promulguée (tu avais "—" : je ne change pas ton intention ici)
+    if (joParam) {
+      header = { ...header, status: "—" };
+    }
 
     // ✅ Timeline depuis DB
-    let timeline: CanonTimelineStep[] = (timelineRows ?? []).map((r) => {
+    let timeline: CanonTimelineStepUI[] = (timelineRows ?? []).map((r) => {
       const sid = r.numero_scrutin ? String(r.numero_scrutin) : "";
       return {
         label: (r.titre ?? "").trim() || "Étape",
@@ -1486,8 +1504,17 @@ if (joParam) {
         sources: [{ label: "Fiche loi (app)", href: `/lois/${encodeURIComponent(id)}` }],
       },
     };
-  }, [ id, lockedHeroTitle, fromKey, fromLabel, loiTitle, timelineRows, titleFromId, seedScrutin, joParam ]);
-
+  }, [
+    id,
+    lockedHeroTitle,
+    fromKey,
+    fromLabel,
+    loiTitle,
+    timelineRows,
+    titleFromId,
+    seedScrutin,
+    joParam,
+  ]);
 
   const showTLDR = model.tldr.length > 0;
 
@@ -1568,7 +1595,6 @@ if (joParam) {
     );
   }
 
-
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
@@ -1597,8 +1623,6 @@ if (joParam) {
           </Pressable>
         </View>
 
-
-
         {/* 0) HEADER */}
         <View style={styles.heroCard}>
           <Text style={styles.heroTitle} numberOfLines={2}>
@@ -1606,34 +1630,31 @@ if (joParam) {
           </Text>
 
           {model?.jo_date_promulgation ? (
-  <View style={{ marginTop: 8 }}>
-    <LoiPromulgationBlock datePromulgation={model.jo_date_promulgation} />
-  </View>
-) : null}
-
+            <View style={{ marginTop: 8 }}>
+              <LoiPromulgationBlock datePromulgation={model.jo_date_promulgation} />
+            </View>
+          ) : null}
 
           <View style={styles.heroMetaRow}>
-  <View style={styles.statusPill}>
-  <Text style={styles.statusText}>Statut : {model.header.status}</Text>
-</View>
+            <View style={styles.statusPill}>
+              <Text style={styles.statusText}>Statut : {model.header.status}</Text>
+            </View>
 
-  {/* ✅ Facts lisibles : Vote vs JO */}
-  <View style={styles.factsCol}>
-    <Text style={styles.factLine}>
-      <Text style={styles.factK}>Vote final à l’Assemblée :</Text>{" "}
-      {model.header.lastStepDate !== "—" ? model.header.lastStepDate : "—"}
-    </Text>
+            {/* ✅ Facts lisibles : Vote vs JO */}
+            <View style={styles.factsCol}>
+              <Text style={styles.factLine}>
+                <Text style={styles.factK}>Vote final à l’Assemblée :</Text>{" "}
+                {model.header.lastStepDate !== "—" ? model.header.lastStepDate : "—"}
+              </Text>
 
-    {model?.jo_date_promulgation ? (
-      <Text style={styles.factLine}>
-        <Text style={styles.factK}>Promulgation (JO) :</Text>{" "}
-        {fmtDateFR(model.jo_date_promulgation)}
-      </Text>
-    ) : null}
-  </View>
-</View>
-
-
+              {model?.jo_date_promulgation ? (
+                <Text style={styles.factLine}>
+                  <Text style={styles.factK}>Promulgation (JO) :</Text>{" "}
+                  {fmtDateFR(model.jo_date_promulgation)}
+                </Text>
+              ) : null}
+            </View>
+          </View>
 
           <Text style={styles.heroOneLiner} numberOfLines={2}>
             {model.header.oneLiner}
@@ -1657,6 +1678,15 @@ if (joParam) {
                 <Text style={styles.anchorText}>En clair</Text>
               </Pressable>
             )}
+
+{procedureTimeline?.length ? (
+   <Pressable
+     onPress={() => scrollToAnchor("procedure")}
+     style={styles.anchorBtn}
+   >
+    <Text style={styles.anchorText}>Procédure</Text>
+   </Pressable>
+ ) : null}
 
             <Pressable
               onPress={() => scrollToAnchor("timeline")}
@@ -1695,6 +1725,8 @@ if (joParam) {
                 }
               />
 
+              {/* ✅ Procédure (AN/Sénat) — source dossier */}
+              
               <View style={{ gap: 10 }}>
                 {resumeV0.sentences.map((s, idx) => (
                   <Text key={`v0-${idx}`} style={styles.bullet}>
@@ -1704,9 +1736,7 @@ if (joParam) {
               </View>
 
               {!!resumeV0.note && (
-                <Text style={[styles.muted, { marginTop: 10 }]}>
-                  {resumeV0.note}
-                </Text>
+                <Text style={[styles.muted, { marginTop: 10 }]}>{resumeV0.note}</Text>
               )}
             </View>
           </View>
@@ -1754,6 +1784,66 @@ if (joParam) {
             )}
           </View>
         </View>
+
+{/* 3) Procédure (AN/Sénat) — dossier */}
+        {procedureTimeline?.length ? (
+          <View onLayout={setAnchor("procedure")}>
+           <View style={styles.card}>
+             <SectionTitle
+                title="Procédure"
+                subtitle="Étapes officielles (dossier AN/Sénat)"
+                right={
+                  <Text style={styles.muted}>
+                    {procedureTimeline.length} étape(s)
+                  </Text>
+                }
+              />
+
+              <View style={{ gap: 8 }}>
+                {procedureTimeline.slice(0, 12).map((s, i) => {
+                  const meta = [
+                    s.chambre ? String(s.chambre).toUpperCase() : null,
+                    s.lecture != null ? String(s.lecture) : null,
+                    s.date_start ? fmtDateFR(s.date_start) : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+
+                  return (
+                    <View
+                      key={`proc-${s.step_index}-${i}`}
+                      style={styles.procRow}
+                    >
+                      <Text style={styles.procLabel}>
+                        {s.label || "Étape"}
+                      </Text>
+                      {!!meta && <Text style={styles.procMeta}>{meta}</Text>}
+
+                      {typeof s.source_url === "string" &&
+                      s.source_url.trim().length > 0 ? (
+                        <View style={styles.proofRow}>
+                          <ProofLink
+                            p={{
+                              label: s.source_label || "Source",
+                              href: s.source_url.trim(),
+                            }}
+                            onPress={openHref}
+                          />
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+
+                {procedureTimeline.length > 12 ? (
+                  <Text style={styles.muted}>
+                    +{procedureTimeline.length - 12} étapes
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          </View>
+       ) : null}
 
         {/* 4) Timeline */}
         <View onLayout={setAnchor("timeline")}>
@@ -1853,9 +1943,7 @@ if (joParam) {
               subtitle="Résultats par scrutin — puis détail par groupes"
               right={
                 voteScrutinIds.length ? (
-                  <Text style={styles.muted}>
-                    {voteScrutinIds.length} scrutin(s)
-                  </Text>
+                  <Text style={styles.muted}>{voteScrutinIds.length} scrutin(s)</Text>
                 ) : null
               }
             />
@@ -1872,7 +1960,8 @@ if (joParam) {
 
                   // ✅ fallback ultime = scrutins_data (source fiable, déjà validée par la fiche Scrutin)
                   let g =
-                    tot && ((tot as any).nb_pour ?? 0) + ((tot as any).nb_contre ?? 0) > 0
+                    tot &&
+                    ((tot as any).nb_pour ?? 0) + ((tot as any).nb_contre ?? 0) > 0
                       ? {
                           pour: Number((tot as any).nb_pour ?? 0),
                           contre: Number((tot as any).nb_contre ?? 0),
@@ -1893,13 +1982,6 @@ if (joParam) {
                   }
 
                   const totalExprimes = g.pour + g.contre + g.abstention;
-
-                  console.log("[CHECK TOT]", {
-                    sid,
-                    totKeys: tot ? Object.keys(tot) : null,
-                    tot,
-                    firstRow: rows?.[0] ?? null,
-                  });
 
                   // (optionnel) participation si DB fournit nb_total_votes & nb_non_votants
                   const participation =
@@ -2250,20 +2332,54 @@ const styles = StyleSheet.create({
   },
   sourceLabel: { color: INK, fontSize: 12, fontWeight: "900" },
   chev: { color: INK, fontSize: 18, fontWeight: "900" },
-factsCol: {
+
+  factsCol: {
+    flex: 1,
+    gap: 4,
+    paddingLeft: 2,
+  },
+  factLine: {
+    color: INK_SOFT,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+  },
+  factK: {
+    color: INK,
+    fontWeight: "900",
+  },
+
+  procRow: {
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    backgroundColor: "rgba(18,20,23,0.02)",
+    gap: 4,
+  },
+  procLabel: { color: INK, fontSize: 12, fontWeight: "900" },
+  procMeta: {
+    color: INK_SOFT,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+    opacity: 0.9,
+  },
+procLeft: { width: 16, alignItems: "center" },
+procDot: {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  backgroundColor: "rgba(18,20,23,0.35)",
+  marginTop: 4,
+},
+procLine: {
+  width: 2,
   flex: 1,
-  gap: 4,
-  paddingLeft: 2,
-},
-factLine: {
-  color: INK_SOFT,
-  fontSize: 12,
-  lineHeight: 16,
-  fontWeight: "800",
-},
-factK: {
-  color: INK,
-  fontWeight: "900",
+  backgroundColor: BORDER,
+  marginTop: 6,
+  borderRadius: 999,
 },
 
 });

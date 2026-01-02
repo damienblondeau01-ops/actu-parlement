@@ -15,6 +15,7 @@
     "sync:deputes": "node ingestion/sync_deputes.js",
     "sync:votes:l17": "node ingestion/votes/fetch_votes_from_opendata.js 17",
     "sync:daily:l17": "node ingestion/sync_daily_17.js",
+    "ingest:jo": "node ingestion/jo/sync_loi_jo_events.cjs",
     "dossiers:download": "node jobs/download_latest_dossiers_zip.js",
     "dossiers:sync": "node ingestion/lois/fetch_dossiers_legislatifs.cjs",
     "ai:resumes": "node ingestion/generate_resumes_lois.js"

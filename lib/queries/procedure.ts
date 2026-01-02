@@ -1,29 +1,52 @@
-import { supabase } from "@/lib/supabaseClient";
+// lib/queries/procedure.ts
+import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
 
 export type LoiProcedureStep = {
-  dossier_id: string;
-  step_order: number;
-  step_kind: string;
+  loi_id: string;
+  dossier_id: string | null;
+
+  // ✅ la view expose step_index (pas step_order)
+  step_index: number | null;
+
+  step_kind: string | null;
   chambre: string | null;
   lecture: string | null;
-  label: string;
-  date_start: string | null;
+
+  label: string | null;
+  date_start: string | null; // YYYY-MM-DD
   date_end: string | null;
+
   source_label: string | null;
   source_url: string | null;
 };
 
-export async function fetchLoiProcedure(loiId: string, limit = 200) {
-  const { data, error } = await supabase
-    .from("loi_procedure_app")
+const VIEW_LOI_PROCEDURE_APP = "loi_procedure_app";
+
+/**
+ * ✅ Récupère les étapes du dossier parlementaire (view)
+ * Fallback strict: si vue absente / erreur -> []
+ */
+export async function fetchLoiProcedure(
+  loiId: string,
+  limit = 200
+): Promise<LoiProcedureStep[]> {
+  const id = String(loiId ?? "").trim();
+  if (!id) return [];
+
+  const { data, error } = await fromSafe(DB_VIEWS.LOI_PROCEDURE_APP )
     .select(
-      "dossier_id,step_order,step_kind,chambre,lecture,label,date_start,date_end,source_label,source_url"
+      "loi_id,dossier_id,step_index,step_kind,chambre,lecture,label,date_start,date_end,source_label,source_url"
     )
-    .eq("loi_id", loiId)
-    .order("step_order", { ascending: true })
+    .eq("loi_id", id)
+    .order("step_index", { ascending: true })
     .order("date_start", { ascending: true })
     .limit(limit);
 
-  if (error) throw error;
-  return (data ?? []) as LoiProcedureStep[];
+  if (error) {
+    console.log("[fetchLoiProcedure] error =", error?.message ?? error);
+    return [];
+  }
+
+  // ✅ évite le warning TS "GenericStringError[]" : on cast via unknown
+  return ((data ?? []) as unknown) as LoiProcedureStep[];
 }

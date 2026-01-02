@@ -1,6 +1,8 @@
 // lib/queries/actu.ts
 import { supabase } from "@/lib/supabaseClient";
 import { routeFromItemId } from "@/lib/routes";
+import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
+
 
 export type Entity = "scrutin" | "loi" | "amendement" | "motion" | "declaration";
 
@@ -11,6 +13,9 @@ export type ActuItem = {
 
   /** ✅ IMPORTANT: doit être un "loi_id canon" quand possible (pas un scrutin-1234) */
   loi_id?: string | null;
+
+  /** ✅ B2.2: enrichissement JO (Légifrance) */
+  jo_date_promulgation?: string | null;
 
   /** champs utiles pour tes heuristiques UI (kicker amendement, etc.) */
   article_ref?: string | null;
@@ -120,7 +125,10 @@ function humanScrutinSubtitle(r: any) {
  * - on délègue à routeFromItemId(id)
  * - amendement/motion/declaration: pas d'écran dédié => null
  */
-function buildHref(entity: Entity, rawId: string | null | undefined): string | null {
+function buildHref(
+  entity: Entity,
+  rawId: string | null | undefined
+): string | null {
   const id = String(rawId ?? "").trim();
   if (!id) return null;
 
@@ -190,8 +198,9 @@ export async function fetchActuItems(opts?: {
   const limLois = opts?.limLois ?? 40;
 
   // 1) SCRUTINS (view enrichie)
-  const { data: scrutins, error: e1 } = await supabase
-    .from("scrutins_loi_enrichis_unified")
+  const { data: scrutins, error: e1 } = await fromSafe(
+  DB_VIEWS.SCRUTINS_LOI_ENRICHIS_UNIFIED
+)
     .select(
       [
         "numero_scrutin",
@@ -213,11 +222,20 @@ export async function fetchActuItems(opts?: {
   debugScrutinsViewSnapshot(scrutins as any[]);
 
   const scrutinsItems: ActuItem[] = ((scrutins ?? []) as any[]).map((r: any) => {
-    const loiIdCanon = safeCanonLoiId(r.loi_id_canon);
+    const rawCanon = safeStr(r.loi_id_canon);
+    const loiIdCanon = safeCanonLoiId(rawCanon);
 
     const num = safeStr(r.numero_scrutin);
     const loiIdScrutin = safeStr(r.loi_id_scrutin);
     const idScrutin = loiIdScrutin || (num ? `scrutin-${num}` : "scrutin");
+
+    // ✅ B2.2 — priorité à un ID DB pour la jointure JO
+    const isEditorialKey =
+      !!loiIdCanon &&
+      (loiIdCanon.startsWith("loi:") || loiIdCanon.startsWith("title:"));
+
+    const loiIdForJoin =
+      !loiIdCanon || isEditorialKey ? safeCanonLoiId(loiIdScrutin) : loiIdCanon;
 
     const dateISO = asISO(r.date_scrutin);
 
@@ -231,7 +249,8 @@ export async function fetchActuItems(opts?: {
       id: String(idScrutin),
       entity: "scrutin",
 
-      loi_id: loiIdCanon,
+      // ✅ ICI la seule vraie correction
+      loi_id: loiIdForJoin,
 
       article_ref: safeStr(r.article_ref),
       date: dateISO,
@@ -254,9 +273,7 @@ export async function fetchActuItems(opts?: {
   if (DEBUG_ACTU) {
     const scrAny = (scrutins ?? []) as any[];
     const hit = scrAny.find((r: any) =>
-      String(r?.titre ?? r?.objet ?? "")
-        .toLowerCase()
-        .includes("permettre")
+      String(r?.titre ?? r?.objet ?? "").toLowerCase().includes("permettre")
     ) as any | undefined;
 
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -274,8 +291,7 @@ export async function fetchActuItems(opts?: {
   debugScrutinsCanonStats(scrutinsItems);
 
   // 2) LOIS (dernière activité)
-  const { data: lois, error: e2 } = await supabase
-    .from("lois_recent")
+  const { data: lois, error: e2 } = await fromSafe(DB_VIEWS.LOIS_RECENT)
     .select("*")
     .order("date_dernier_scrutin", { ascending: false })
     .limit(limLois);
@@ -309,14 +325,28 @@ export async function fetchActuItems(opts?: {
         : `Loi ${rawId}`);
 
     const subtitle =
-      safeStr(r.resume_citoyen) ?? safeStr(r.objet) ?? "Dernières avancées à l’Assemblée";
+      safeStr(r.resume_citoyen) ??
+      safeStr(r.objet) ??
+      "Dernières avancées à l’Assemblée";
     const phase = safeStr(r.phase_label ?? r.phase);
+
+    // ✅ B2.2 — si rawId est éditorial (loi:/title:), on utilise l'id_dossier pour joindre le JO
+    const canon = safeCanonLoiId(rawId);
+    const dossierId =
+      safeStr((r as any)?.id_dossier) ?? safeStr((r as any)?.dossier_id) ?? null;
+
+    const isEditorialKey =
+      !!canon && (canon.startsWith("loi:") || canon.startsWith("title:"));
+
+    const loiIdForJoin =
+      entity === "loi" ? (isEditorialKey ? safeCanonLoiId(dossierId) : canon) : null;
 
     return {
       id: String(rawId),
       entity,
 
-      loi_id: entity === "loi" ? safeCanonLoiId(rawId) : null,
+      // ✅ ICI la correction (uniquement)
+      loi_id: loiIdForJoin,
 
       date: dateISO,
       phase_label: phase,
@@ -333,10 +363,78 @@ export async function fetchActuItems(opts?: {
     };
   });
 
+  // ✅ B2.2 — enrichissement JO: date_promulgation depuis loi_jo_status
   const merged = [...scrutinsItems, ...loisItems].filter(Boolean);
+
+  // ✅ On collecte toutes les clés possibles (loi_id + dossier_id + loi_id_scrutin + alias)
+  const loiIds = Array.from(
+    new Set(
+      merged
+        .flatMap((x) => joJoinKeysForActuItem(x as any))
+        .map((s) => String(s ?? "").trim())
+        .filter(Boolean)
+    )
+  );
+
+  if (loiIds.length > 0) {
+    const { data: joRows, error: joErr } = await fromSafe(DB_VIEWS.LOI_JO_STATUS)
+      .select("loi_id,date_promulgation")
+      .in("loi_id", loiIds);
+
+    if (!joErr && Array.isArray(joRows)) {
+      const joMap = new Map<string, string | null>();
+      for (const r of joRows as any[]) {
+        const id = String(r?.loi_id ?? "").trim();
+        if (id) joMap.set(id, (r as any)?.date_promulgation ?? null);
+      }
+
+      // ✅ On remplit jo_date_promulgation sur chaque item (première clé qui matche)
+      for (const it of merged) {
+        const keys = joJoinKeysForActuItem(it as any);
+        let v: string | null = null;
+
+        for (const k of keys) {
+          const kk = String(k ?? "").trim();
+          if (!kk) continue;
+          if (joMap.has(kk)) {
+            v = joMap.get(kk) ?? null;
+            break;
+          }
+        }
+
+        (it as any).jo_date_promulgation = v;
+      }
+    } else if (DEBUG_ACTU && joErr) {
+      dlog("[ACTU][JO] loi_jo_status error =", joErr.message);
+    }
+  }
+
   merged.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
   return merged;
 }
+
+function joJoinKeysForActuItem(it: ActuItem): string[] {
+  const out: string[] = [];
+  const k1 = safeStr((it as any)?.loi_id);
+  const k2 = safeStr((it as any)?.dossier_id);
+  const k3 = safeStr((it as any)?.loi_id_scrutin);
+
+  if (k1) out.push(k1);
+  if (k2) out.push(k2);
+  if (k3) out.push(k3);
+
+  // ✅ Alias connu: Loi spéciale (article 45 LOLF) => clé de loi_jo_status
+  const canon = String(k1 ?? "").toLowerCase();
+  if (
+    canon.includes("loi-speciale") &&
+    (canon.includes("article-45") || canon.includes("lolf"))
+  ) {
+    out.push("loi-speciale-article-45-lolf-2026");
+  }
+
+  return out;
+}
+
 
 /** Aliases (compat imports) */
 export async function fetchActu() {

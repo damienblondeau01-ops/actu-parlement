@@ -206,7 +206,7 @@ export default function DeputesListScreen() {
     const q = normalizeText(debouncedSearch.trim());
 
     return deputes.filter((d) => {
-      if (selectedGroup && d.groupeAbrev !== selectedGroup) return false;
+      if (selectedGroup && clean(d.groupeAbrev) !== clean(selectedGroup)) return false;
 
       if (q) {
         const nameRaw =

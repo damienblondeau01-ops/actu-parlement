@@ -9,12 +9,14 @@ import {
   Text,
   View,
   Pressable,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabaseClient";
 import { theme } from "../../../lib/theme";
 import { Image as ExpoImage } from "expo-image";
 import * as Haptics from "expo-haptics";
+import { Ionicons } from "@expo/vector-icons";
 import DeputeHero from "../../../components/depute/DeputeHero";
 import DeputeActivityTab from "@components/depute/DeputeActivityTab";
 import DeputeAboutTab from "../../../components/depute/DeputeAboutTab";
@@ -29,7 +31,6 @@ import {
   voteLabel,
   computeDTriplePlusNarrative,
 } from "../../../lib/political";
-
 
 type DataScope = "ANALYTICS_L16" | "RECENT_L17" | "MIXED";
 
@@ -47,6 +48,12 @@ type DeputeRow = {
   age: number | string | null;
   job: string | null;
   profession: string | null;
+
+  // ✅ Liens officiels / contact (colonnes réelles)
+  mail: string | null;
+  twitter: string | null;
+  facebook: string | null;
+  website: string | null;
 
   scoreParticipation: number | string | null;
   scoreLoyaute: number | string | null;
@@ -93,7 +100,6 @@ type TimeBucket = "TODAY" | "WEEK" | "OLDER";
 
 /* ---------------- Helpers robustes ---------------- */
 
-
 function computeSafeNumber(value: number | string | null): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") return value;
@@ -131,6 +137,12 @@ function signalPillStyle(level: SignalLevel) {
   if (level === "ok") return "ok";
   if (level === "warn") return "warn";
   return "info";
+}
+
+function openUrl(url?: string | null) {
+  const u = String(url ?? "").trim();
+  if (!u) return;
+  Linking.openURL(u).catch(() => {});
 }
 
 /** Mini barre de progression “premium” (sans lib) */
@@ -241,18 +253,17 @@ export default function DeputeDetailScreen() {
   const deltaHints = useMemo(() => computeDeltaHints(scores), [scores]);
 
   // 🧭 Portée des données affichées sur cet écran
-const DATA_SCOPE = useMemo<DataScope>(() => {
-  const hasAnalytics =
-    scores.participation !== null || scores.loyaute !== null || scores.majorite !== null;
+  const DATA_SCOPE = useMemo<DataScope>(() => {
+    const hasAnalytics =
+      scores.participation !== null || scores.loyaute !== null || scores.majorite !== null;
 
-  const hasRecent = recentVotes.length > 0;
+    const hasRecent = recentVotes.length > 0;
 
-  if (hasAnalytics && hasRecent) return "MIXED";
-  if (hasAnalytics) return "ANALYTICS_L16";
-  if (hasRecent) return "RECENT_L17";
-  return "MIXED";
-}, [scores.participation, scores.loyaute, scores.majorite, recentVotes.length]);
-
+    if (hasAnalytics && hasRecent) return "MIXED";
+    if (hasAnalytics) return "ANALYTICS_L16";
+    if (hasRecent) return "RECENT_L17";
+    return "MIXED";
+  }, [scores.participation, scores.loyaute, scores.majorite, recentVotes.length]);
 
   const lectureDPlusPlus = useMemo(() => {
     const markers = (recentVotes ?? []).slice(0, 3);
@@ -284,7 +295,9 @@ const DATA_SCOPE = useMemo<DataScope>(() => {
         : "variable";
 
     const participationHint =
-      counts.nv >= 3 ? "Présence irrégulière sur cette courte période." : "Présence correcte sur cette courte période.";
+      counts.nv >= 3
+        ? "Présence irrégulière sur cette courte période."
+        : "Présence correcte sur cette courte période.";
 
     const summary = [
       n > 0
@@ -337,6 +350,10 @@ const DATA_SCOPE = useMemo<DataScope>(() => {
           age,
           job,
           profession,
+          mail,
+          twitter,
+          facebook,
+          website,
           scoreParticipation,
           scoreLoyaute,
           scoreMajorite,
@@ -549,7 +566,7 @@ const DATA_SCOPE = useMemo<DataScope>(() => {
       </Pressable>
     );
   };
-  
+
   const timelineSections = useMemo<Record<TimeBucket, RecentVote[]>>(() => {
     const base: Record<TimeBucket, RecentVote[]> = { TODAY: [], WEEK: [], OLDER: [] };
     if (!recentVotes || recentVotes.length === 0) return base;
@@ -608,6 +625,13 @@ const DATA_SCOPE = useMemo<DataScope>(() => {
     );
   }
 
+  const hasLinks =
+    !!(depute.mail && String(depute.mail).trim()) ||
+    !!(depute.twitter && String(depute.twitter).trim()) ||
+    !!(depute.facebook && String(depute.facebook).trim()) ||
+    !!(depute.website && String(depute.website).trim()) ||
+    !!(depute.photoUrl && String(depute.photoUrl).trim());
+
   return (
     <SafeAreaView style={styles.container}>
       {/* HEADER FIXE */}
@@ -654,78 +678,161 @@ const DATA_SCOPE = useMemo<DataScope>(() => {
 
         {/* ABOUT */}
         {activeTab === "ABOUT" && (
-  <DeputeAboutTab
-    depute={depute}
-    circoLabel={circoLabel}
-    styles={styles}
-  />
-)}
+          <View style={styles.tabCard}>
+            <DeputeAboutTab depute={depute} circoLabel={circoLabel} styles={styles} />
 
+            {hasLinks && (
+              <View style={styles.linksCard}>
+                <Text style={styles.linksTitle}>Liens officiels</Text>
+
+                {!!depute.mail && (
+                  <Pressable
+                    onPress={() => openUrl(`mailto:${String(depute.mail).trim()}`)}
+                    style={({ pressed }) => [
+                      styles.linkRow,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Ionicons name="mail-outline" size={18} color={theme.colors.text as any} />
+                    <Text style={styles.linkText} numberOfLines={1}>
+                      {String(depute.mail).trim()}
+                    </Text>
+                  </Pressable>
+                )}
+
+                {!!depute.twitter && (
+                  <Pressable
+                    onPress={() => {
+                      const t = String(depute.twitter).trim();
+                      const handle = t.startsWith("@") ? t.slice(1) : t;
+                      openUrl(`https://x.com/${handle}`);
+                    }}
+                    style={({ pressed }) => [
+                      styles.linkRow,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Ionicons name="logo-twitter" size={18} color={theme.colors.text as any} />
+                    <Text style={styles.linkText} numberOfLines={1}>
+                      {String(depute.twitter).trim()}
+                    </Text>
+                  </Pressable>
+                )}
+
+                {!!depute.facebook && (
+                  <Pressable
+                    onPress={() => {
+                      const f = String(depute.facebook).trim();
+                      openUrl(f.startsWith("http") ? f : `https://www.facebook.com/${f}`);
+                    }}
+                    style={({ pressed }) => [
+                      styles.linkRow,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Ionicons name="logo-facebook" size={18} color={theme.colors.text as any} />
+                    <Text style={styles.linkText} numberOfLines={1}>
+                      {String(depute.facebook).trim()}
+                    </Text>
+                  </Pressable>
+                )}
+
+                {!!depute.website && (
+                  <Pressable
+                    onPress={() => openUrl(String(depute.website).trim())}
+                    style={({ pressed }) => [
+                      styles.linkRow,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Ionicons name="link-outline" size={18} color={theme.colors.text as any} />
+                    <Text style={styles.linkText} numberOfLines={1}>
+                      {String(depute.website).trim()}
+                    </Text>
+                  </Pressable>
+                )}
+
+                {!!depute.photoUrl && (
+                  <Pressable
+                    onPress={() => openUrl(String(depute.photoUrl).trim())}
+                    style={({ pressed }) => [
+                      styles.linkRow,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Ionicons name="image-outline" size={18} color={theme.colors.text as any} />
+                    <Text style={styles.linkText} numberOfLines={1}>
+                      Photo officielle (AN)
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+          </View>
+        )}
 
         {activeTab === "VOTES" && (
-  <View style={styles.tabCard}>
-    <Text style={styles.sectionTitle}>Votes</Text>
+          <View style={styles.tabCard}>
+            <Text style={styles.sectionTitle}>Votes</Text>
 
-    <DataScopeBadge scope={DATA_SCOPE} style={{ marginBottom: 10 }} />
+            <DataScopeBadge scope={DATA_SCOPE} style={{ marginBottom: 10 }} />
 
-    <DeputeVotesTab
-      recentVotesLoading={recentVotesLoading}
-      timelineSections={timelineSections}
-      voteLabel={voteLabel}
-      normalizeVoteKey={normalizeVoteKey}
-      sectionLabel={getSectionLabel}
-      router={router}
-      styles={styles}
-    />
-  </View>
-)}
-
-
-        {/* ACTIVITY */}
-        {activeTab === "ACTIVITY" && (
-  <View style={styles.tabCard}>
-    <Text style={styles.sectionTitle}>Activité</Text>
-
-    <DataScopeBadge scope={DATA_SCOPE} style={{ marginBottom: 10 }} />
-
-    <DeputeActivityTab
-  scores={scores}
-  totalVotesCount={totalVotesCount}
-  yearsExperience={yearsExperience}
-  mandatText={mandatText}
-  lectureRapide={lectureRapide}
-  dTriplePlus={dTriplePlus}
-  recentSignals={recentSignals}
-  deltaHints={deltaHints}
-  lectureDPlusPlus={lectureDPlusPlus}
-  voteLabel={voteLabel}
-  normalizeVoteKey={normalizeVoteKey}
-  signalPillStyle={signalPillStyle}
-  ProgressBar={ProgressBar}
-  router={router}
-  styles={styles}
+            <DeputeVotesTab
+              recentVotesLoading={recentVotesLoading}
+              timelineSections={timelineSections}
+              voteLabel={voteLabel}
+              normalizeVoteKey={normalizeVoteKey}
+              sectionLabel={getSectionLabel}
+              router={router}
+              styles={styles}
             />
           </View>
         )}
 
+        {/* ACTIVITY */}
+        {activeTab === "ACTIVITY" && (
+          <View style={styles.tabCard}>
+            <Text style={styles.sectionTitle}>Activité</Text>
+
+            <DataScopeBadge scope={DATA_SCOPE} style={{ marginBottom: 10 }} />
+
+            <DeputeActivityTab
+              scores={scores}
+              totalVotesCount={totalVotesCount}
+              yearsExperience={yearsExperience}
+              mandatText={mandatText}
+              lectureRapide={lectureRapide}
+              dTriplePlus={dTriplePlus}
+              recentSignals={recentSignals}
+              deltaHints={deltaHints}
+              lectureDPlusPlus={lectureDPlusPlus}
+              voteLabel={voteLabel}
+              normalizeVoteKey={normalizeVoteKey}
+              signalPillStyle={signalPillStyle}
+              ProgressBar={ProgressBar}
+              router={router}
+              styles={styles}
+            />
+          </View>
+        )}
 
         <View style={styles.footerNoteContainer}>
           <Text style={styles.footerNote}>
-  {DATA_SCOPE === "ANALYTICS_L16" &&
-    "Analyse basée sur les votes de la 16ᵉ législature — données officielles AN."}
+            {DATA_SCOPE === "ANALYTICS_L16" &&
+              "Analyse basée sur les votes de la 16ᵉ législature — données officielles AN."}
 
-  {DATA_SCOPE === "RECENT_L17" &&
-    "Votes récents issus de la 17ᵉ législature — données officielles AN."}
+            {DATA_SCOPE === "RECENT_L17" &&
+              "Votes récents issus de la 17ᵉ législature — données officielles AN."}
 
-  {DATA_SCOPE === "MIXED" &&
-    "Analyse basée sur la 16ᵉ législature, complétée par des votes récents de la 17ᵉ — données officielles AN."}
-</Text>
-
+            {DATA_SCOPE === "MIXED" &&
+              "Analyse basée sur la 16ᵉ législature, complétée par des votes récents de la 17ᵉ — données officielles AN."}
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
 
@@ -1084,77 +1191,112 @@ const styles = StyleSheet.create({
     opacity: 0.85,
   },
 
+  // ✅ Bloc “Liens officiels” (minimal)
+  linksCard: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  linksTitle: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: theme.colors.text,
+    marginBottom: 8,
+  },
+  linkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+    marginBottom: 8,
+  },
+  linkText: {
+    flex: 1,
+    fontSize: 13,
+    color: theme.colors.text,
+    fontWeight: "700",
+  },
+
   // ✅ D+++ — Lecture politique assistée
-d3Card: {
-  marginTop: 10,
-  borderRadius: 14,
-  paddingVertical: 12,
-  paddingHorizontal: 12,
-  backgroundColor: theme.colors.surface || "#020617",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.08)",
-},
-d3HeaderRow: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-},
-d3Title: {
-  fontSize: 13,
-  fontWeight: "900",
-  color: theme.colors.text,
-  letterSpacing: 0.2,
-},
-d3Badge: {
-  paddingHorizontal: 10,
-  paddingVertical: 6,
-  borderRadius: 999,
-  borderWidth: 1,
-},
-d3BadgeHigh: {
-  backgroundColor: "rgba(34,197,94,0.12)",
-  borderColor: "rgba(34,197,94,0.25)",
-},
-d3BadgeMid: {
-  backgroundColor: "rgba(234,179,8,0.12)",
-  borderColor: "rgba(234,179,8,0.25)",
-},
-d3BadgeLow: {
-  backgroundColor: "rgba(239,68,68,0.10)",
-  borderColor: "rgba(239,68,68,0.22)",
-},
-d3BadgeText: {
-  color: theme.colors.text,
-  fontSize: 11,
-  fontWeight: "900",
-  opacity: 0.9,
-},
-d3Profile: {
-  marginTop: 8,
-  fontSize: 15,
-  fontWeight: "900",
-  color: theme.colors.text,
-},
-d3Label: {
-  marginTop: 10,
-  fontSize: 12,
-  fontWeight: "800",
-  color: theme.colors.subtext,
-  letterSpacing: 0.15,
-},
-d3Text: {
-  marginTop: 4,
-  fontSize: 13,
-  color: theme.colors.text,
-  lineHeight: 18,
-},
-d3Footnote: {
-  marginTop: 10,
-  fontSize: 12,
-  color: theme.colors.subtext,
-  lineHeight: 17,
-  opacity: 0.9,
-},
+  d3Card: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  d3HeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  d3Title: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: theme.colors.text,
+    letterSpacing: 0.2,
+  },
+  d3Badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  d3BadgeHigh: {
+    backgroundColor: "rgba(34,197,94,0.12)",
+    borderColor: "rgba(34,197,94,0.25)",
+  },
+  d3BadgeMid: {
+    backgroundColor: "rgba(234,179,8,0.12)",
+    borderColor: "rgba(234,179,8,0.25)",
+  },
+  d3BadgeLow: {
+    backgroundColor: "rgba(239,68,68,0.10)",
+    borderColor: "rgba(239,68,68,0.22)",
+  },
+  d3BadgeText: {
+    color: theme.colors.text,
+    fontSize: 11,
+    fontWeight: "900",
+    opacity: 0.9,
+  },
+  d3Profile: {
+    marginTop: 8,
+    fontSize: 15,
+    fontWeight: "900",
+    color: theme.colors.text,
+  },
+  d3Label: {
+    marginTop: 10,
+    fontSize: 12,
+    fontWeight: "800",
+    color: theme.colors.subtext,
+    letterSpacing: 0.15,
+  },
+  d3Text: {
+    marginTop: 4,
+    fontSize: 13,
+    color: theme.colors.text,
+    lineHeight: 18,
+  },
+  d3Footnote: {
+    marginTop: 10,
+    fontSize: 12,
+    color: theme.colors.subtext,
+    lineHeight: 17,
+    opacity: 0.9,
+  },
 
   glowPour: {
     backgroundColor: "rgba(34,197,94,0.95)",
@@ -1181,257 +1323,255 @@ d3Footnote: {
     shadowRadius: 4,
   },
   dppCard: {
-  marginTop: 10,
-  borderRadius: 12,
-  paddingVertical: 10,
-  paddingHorizontal: 10,
-  backgroundColor: theme.colors.surface || "#020617",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.08)",
-},
-dppHeader: {
-  flexDirection: "column",
-  alignItems: "flex-start",
-  gap: 4,
-},
-dppTitle: { fontSize: 13, fontWeight: "900", color: theme.colors.text },
-dppHint: { fontSize: 11, fontWeight: "700", color: theme.colors.subtext, opacity: 0.9 },
+    marginTop: 10,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  dppHeader: {
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 4,
+  },
+  dppTitle: { fontSize: 13, fontWeight: "900", color: theme.colors.text },
+  dppHint: { fontSize: 11, fontWeight: "700", color: theme.colors.subtext, opacity: 0.9 },
 
-dppSectionTitle: {
-  marginTop: 2,
-  fontSize: 12,
-  fontWeight: "900",
-  color: theme.colors.text,
-  opacity: 0.9,
-},
-dppMuted: { marginTop: 6, fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
+  dppSectionTitle: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: "900",
+    color: theme.colors.text,
+    opacity: 0.9,
+  },
+  dppMuted: { marginTop: 6, fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
 
-dppItem: {
-  borderRadius: 14,
-  paddingVertical: 10,
-  paddingHorizontal: 10,
-  backgroundColor: theme.colors.card,
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.06)",
-},
-dppItemTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 },
-dppItemTitle: { flex: 1, fontSize: 13, fontWeight: "800", color: theme.colors.text, lineHeight: 18 },
-dppItemGo: { fontSize: 16, fontWeight: "900", color: theme.colors.subtext, opacity: 0.9 },
-dppItemMeta: { marginTop: 6, fontSize: 11, fontWeight: "700", color: theme.colors.subtext, opacity: 0.95 },
+  dppItem: {
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: theme.colors.card,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  dppItemTop: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 10 },
+  dppItemTitle: { flex: 1, fontSize: 13, fontWeight: "800", color: theme.colors.text, lineHeight: 18 },
+  dppItemGo: { fontSize: 16, fontWeight: "900", color: theme.colors.subtext, opacity: 0.9 },
+  dppItemMeta: { marginTop: 6, fontSize: 11, fontWeight: "700", color: theme.colors.subtext, opacity: 0.95 },
 
-dppLine: { marginTop: 6, fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
-dppFootnote: { marginTop: 10, fontSize: 11, color: theme.colors.subtext, opacity: 0.75 },
+  dppLine: { marginTop: 6, fontSize: 13, color: theme.colors.subtext, lineHeight: 18 },
+  dppFootnote: { marginTop: 10, fontSize: 11, color: theme.colors.subtext, opacity: 0.75 },
 
-// ✅ D++++ — Signaux récents
-d4Card: {
-  marginTop: 10,
-  borderRadius: 14,
-  paddingVertical: 12,
-  paddingHorizontal: 12,
-  backgroundColor: theme.colors.surface || "#020617",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.08)",
-},
-d4HeaderRow: {
-  flexDirection: "row",
-  alignItems: "baseline",
-  justifyContent: "space-between",
-},
-d4Title: {
-  fontSize: 13,
-  fontWeight: "900",
-  color: theme.colors.text,
-},
-d4Subtitle: {
-  fontSize: 12,
-  fontWeight: "700",
-  color: theme.colors.subtext,
-},
-d4PillsRow: {
-  flexDirection: "row",
-  flexWrap: "wrap",
-  gap: 8,
-  marginTop: 10,
-},
-d4Pill: {
-  paddingHorizontal: 10,
-  paddingVertical: 7,
-  borderRadius: 999,
-  borderWidth: 1,
-},
-d4Pill_ok: {
-  backgroundColor: "rgba(34,197,94,0.10)",
-  borderColor: "rgba(34,197,94,0.20)",
-},
-d4Pill_warn: {
-  backgroundColor: "rgba(239,68,68,0.10)",
-  borderColor: "rgba(239,68,68,0.22)",
-},
-d4Pill_info: {
-  backgroundColor: "rgba(148,163,184,0.10)",
-  borderColor: "rgba(148,163,184,0.18)",
-},
-d4PillText: {
-  fontSize: 12,
-  fontWeight: "800",
-  color: theme.colors.text,
-  opacity: 0.92,
-},
-d4MiniGrid: {
-  marginTop: 12,
-  flexDirection: "row",
-  gap: 8,
-},
-d4MiniItem: {
-  flex: 1,
-  borderRadius: 12,
-  paddingVertical: 10,
-  paddingHorizontal: 10,
-  backgroundColor: "rgba(255,255,255,0.04)",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.06)",
-},
-d4MiniLabel: {
-  fontSize: 11,
-  fontWeight: "800",
-  color: theme.colors.subtext,
-},
-d4MiniValue: {
-  marginTop: 6,
-  fontSize: 16,
-  fontWeight: "900",
-  color: theme.colors.text,
-},
-d4Label: {
-  fontSize: 12,
-  fontWeight: "900",
-  color: theme.colors.subtext,
-  letterSpacing: 0.15,
-},
-d4HintRow: {
-  flexDirection: "row",
-  gap: 10,
-  marginTop: 10,
-  alignItems: "flex-start",
-},
-d4Dot: {
-  width: 10,
-  height: 10,
-  borderRadius: 999,
-  marginTop: 3,
-},
-d4Dot_ok: { backgroundColor: "rgba(34,197,94,0.85)" },
-d4Dot_warn: { backgroundColor: "rgba(239,68,68,0.85)" },
-d4Dot_info: { backgroundColor: "rgba(148,163,184,0.85)" },
-d4HintTitle: {
-  fontSize: 12,
-  fontWeight: "900",
-  color: theme.colors.text,
-},
-d4HintText: {
-  marginTop: 2,
-  fontSize: 13,
-  color: theme.colors.subtext,
-  lineHeight: 18,
-},
-d4Footnote: {
-  marginTop: 12,
-  fontSize: 11,
-  color: theme.colors.subtext,
-  opacity: 0.8,
-  lineHeight: 16,
-},
+  // ✅ D++++ — Signaux récents
+  d4Card: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  d4HeaderRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+  },
+  d4Title: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: theme.colors.text,
+  },
+  d4Subtitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: theme.colors.subtext,
+  },
+  d4PillsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+  },
+  d4Pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  d4Pill_ok: {
+    backgroundColor: "rgba(34,197,94,0.10)",
+    borderColor: "rgba(34,197,94,0.20)",
+  },
+  d4Pill_warn: {
+    backgroundColor: "rgba(239,68,68,0.10)",
+    borderColor: "rgba(239,68,68,0.22)",
+  },
+  d4Pill_info: {
+    backgroundColor: "rgba(148,163,184,0.10)",
+    borderColor: "rgba(148,163,184,0.18)",
+  },
+  d4PillText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: theme.colors.text,
+    opacity: 0.92,
+  },
+  d4MiniGrid: {
+    marginTop: 12,
+    flexDirection: "row",
+    gap: 8,
+  },
+  d4MiniItem: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  d4MiniLabel: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: theme.colors.subtext,
+  },
+  d4MiniValue: {
+    marginTop: 6,
+    fontSize: 16,
+    fontWeight: "900",
+    color: theme.colors.text,
+  },
+  d4Label: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: theme.colors.subtext,
+    letterSpacing: 0.15,
+  },
+  d4HintRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+    alignItems: "flex-start",
+  },
+  d4Dot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    marginTop: 3,
+  },
+  d4Dot_ok: { backgroundColor: "rgba(34,197,94,0.85)" },
+  d4Dot_warn: { backgroundColor: "rgba(239,68,68,0.85)" },
+  d4Dot_info: { backgroundColor: "rgba(148,163,184,0.85)" },
+  d4HintTitle: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: theme.colors.text,
+  },
+  d4HintText: {
+    marginTop: 2,
+    fontSize: 13,
+    color: theme.colors.subtext,
+    lineHeight: 18,
+  },
+  d4Footnote: {
+    marginTop: 12,
+    fontSize: 11,
+    color: theme.colors.subtext,
+    opacity: 0.8,
+    lineHeight: 16,
+  },
 
-// ✅ D+++++ — Lecture intelligente
-d5Card: {
-  marginTop: 10,
-  borderRadius: 14,
-  paddingVertical: 12,
-  paddingHorizontal: 12,
-  backgroundColor: theme.colors.surface || "#020617",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.08)",
-},
-d5Header: {
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 10,
-},
-d5Title: {
-  fontSize: 13,
-  fontWeight: "900",
-  color: theme.colors.text,
-},
-d5Chip: {
-  paddingHorizontal: 10,
-  paddingVertical: 6,
-  borderRadius: 999,
-  borderWidth: 1,
-},
-d5Chip_ok: { backgroundColor: "rgba(34,197,94,0.10)", borderColor: "rgba(34,197,94,0.22)" },
-d5Chip_warn: { backgroundColor: "rgba(239,68,68,0.10)", borderColor: "rgba(239,68,68,0.22)" },
-d5Chip_info: { backgroundColor: "rgba(148,163,184,0.10)", borderColor: "rgba(148,163,184,0.18)" },
-d5ChipText: {
-  fontSize: 11,
-  fontWeight: "900",
-  color: theme.colors.text,
-  opacity: 0.92,
-},
+  // ✅ D+++++ — Lecture intelligente
+  d5Card: {
+    marginTop: 10,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.surface || "#020617",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  d5Header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  d5Title: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: theme.colors.text,
+  },
+  d5Chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  d5Chip_ok: { backgroundColor: "rgba(34,197,94,0.10)", borderColor: "rgba(34,197,94,0.22)" },
+  d5Chip_warn: { backgroundColor: "rgba(239,68,68,0.10)", borderColor: "rgba(239,68,68,0.22)" },
+  d5Chip_info: { backgroundColor: "rgba(148,163,184,0.10)", borderColor: "rgba(148,163,184,0.18)" },
+  d5ChipText: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: theme.colors.text,
+    opacity: 0.92,
+  },
 
-d5SectionLabel: {
-  fontSize: 12,
-  fontWeight: "900",
-  color: theme.colors.subtext,
-  letterSpacing: 0.15,
-},
-d5Muted: {
-  marginTop: 6,
-  fontSize: 13,
-  color: theme.colors.subtext,
-  lineHeight: 18,
-  opacity: 0.9,
-},
+  d5SectionLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: theme.colors.subtext,
+    letterSpacing: 0.15,
+  },
+  d5Muted: {
+    marginTop: 6,
+    fontSize: 13,
+    color: theme.colors.subtext,
+    lineHeight: 18,
+    opacity: 0.9,
+  },
 
-d5Row: {
-  marginTop: 10,
-  flexDirection: "row",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 10,
-  paddingVertical: 10,
-  paddingHorizontal: 10,
-  borderRadius: 12,
-  backgroundColor: "rgba(255,255,255,0.04)",
-  borderWidth: 1,
-  borderColor: "rgba(255,255,255,0.06)",
-},
-d5RowLeft: { flex: 1 },
-d5RowTitle: {
-  fontSize: 13,
-  fontWeight: "900",
-  color: theme.colors.text,
-  lineHeight: 18,
-},
-d5RowSub: {
-  marginTop: 4,
-  fontSize: 12,
-  fontWeight: "700",
-  color: theme.colors.subtext,
-},
-d5RowCta: {
-  fontSize: 12,
-  fontWeight: "900",
-  color: theme.colors.subtext,
-  opacity: 0.95,
-},
-d5Foot: {
-  marginTop: 12,
-  fontSize: 11,
-  color: theme.colors.subtext,
-  opacity: 0.75,
-  lineHeight: 16,
-},
-
-
+  d5Row: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.06)",
+  },
+  d5RowLeft: { flex: 1 },
+  d5RowTitle: {
+    fontSize: 13,
+    fontWeight: "900",
+    color: theme.colors.text,
+    lineHeight: 18,
+  },
+  d5RowSub: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "700",
+    color: theme.colors.subtext,
+  },
+  d5RowCta: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: theme.colors.subtext,
+    opacity: 0.95,
+  },
+  d5Foot: {
+    marginTop: 12,
+    fontSize: 11,
+    color: theme.colors.subtext,
+    opacity: 0.75,
+    lineHeight: 16,
+  },
 });

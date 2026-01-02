@@ -229,6 +229,36 @@ function pickEventStatusFromItems(items: any[]): StatusKey {
   return "pending";
 }
 
+function pickTextStatusFromItems(items: any[]): StatusKey {
+  const arr = items ?? [];
+
+  // On cherche un scrutin "sur le texte" (pas un amendement)
+  for (let i = 0; i < Math.min(arr.length, 40); i++) {
+    const it: any = arr[i];
+    const entity = String(it?.entity ?? it?.type ?? "").toLowerCase();
+
+    const officialRaw =
+      it?.objet ?? it?.titre ?? it?.title ?? it?.subtitle ?? it?.libelle ?? "";
+
+    const looksLikeScrutin =
+      entity === "scrutin" ||
+      String(it?.numero_scrutin ?? "").trim().length > 0 ||
+      String(it?.scrutin_id ?? "").trim().length > 0;
+
+    if (!looksLikeScrutin) continue;
+
+    // Si c'est un vote sur amendement -> on ignore pour le statut "Texte"
+    if (isVoteOnAmendement(String(officialRaw))) continue;
+
+    const s = pickEventStatusFromItems([it]);
+    if (s !== "pending") return s;
+  }
+
+  // Fallback: si on n'a rien trouvé, on garde l'ancien comportement
+  return pickEventStatusFromItems(arr);
+}
+
+
 function isBadListTitle(t?: string | null) {
   const s = String(t ?? "").trim();
   if (!s) return true;
@@ -1049,11 +1079,19 @@ export default function ActuIndexScreen() {
       const tag = (story as any).display?.tag || pickTag(baseDB);
 
       const toneFromDisplay = (story as any)?.display?.tone;
-      const tone: Tone = (toneFromDisplay as Tone) || pickTone(baseDB);
+const tone: Tone = (toneFromDisplay as Tone) || pickTone(baseDB);
 
-      const statusKey = pickEventStatusFromItems(items);
+// ✅ RÈGLE PRODUIT : une carte de loi reflète le statut du TEXTE
+// => on privilégie les scrutins (vote du texte) et on ignore les amendements comme statut principal
+const isLoiStory = String(story.canonKey ?? "").trim().startsWith("loi:");
+const statusKey = isLoiStory
+  ? pickTextStatusFromItems(items)
+  : pickEventStatusFromItems(items);
 
-      return {
+const statusScope = isLoiStory ? ("Texte" as const) : undefined;
+
+
+return {
         id: `story:${String(story.storyKey)}`,
 
         groupKey: story.groupKey,
@@ -1062,10 +1100,16 @@ export default function ActuIndexScreen() {
 
         loi_id_canon: story.canonKey || null,
 
+        // ✅ B2.2 — propagation de la date JO depuis les items du group
+  jo_date_promulgation: (items?.[0] as any)?.jo_date_promulgation ?? null,
+
         // NOTE: clé DB timeline: on préfère le slug DB, sinon canon
         loi_id_scrutin: firstLoiIdSlug || story.canonKey || null,
 
         dossier_id: firstDossierId || story.loiKeyRaw || null,
+
+          jo_key: (String(story.canonKey ?? "").toLowerCase().includes("loi-speciale") ? "loi-speciale-article-45-lolf-2026" : null),
+
 
         numero_scrutin: (firstAny as any)?.numero_scrutin ?? null,
 
@@ -1082,6 +1126,7 @@ export default function ActuIndexScreen() {
 
         statsLine,
         statusKey,
+        statusScope,
 
         groupCount: nint(story.summary?.total) || items.length || 1,
         previewCount: items.length,
@@ -1196,10 +1241,22 @@ export default function ActuIndexScreen() {
       if (canonKey && canonKey.startsWith("loi:")) {
         const seedScrutin = String((ui as any)?.numero_scrutin ?? "").trim();
 
-        const dbLoiId =
-          String((ui as any)?.loi_id_scrutin ?? "").trim() ||
-          String((ui as any)?.dossier_id ?? "").trim() ||
-          canonKey;
+        const rawScrutinId = String((ui as any)?.loi_id_scrutin ?? "").trim();
+const rawDossierId = String((ui as any)?.dossier_id ?? "").trim();
+
+// ❌ on refuse les ids qui sont en réalité des scrutins
+const safeScrutinId =
+  rawScrutinId && !rawScrutinId.startsWith("scrutin-")
+    ? rawScrutinId
+    : "";
+
+const safeDossierId =
+  rawDossierId && !rawDossierId.startsWith("scrutin-")
+    ? rawDossierId
+    : "";
+
+// ✅ priorité absolue à la loi canon
+const dbLoiId = canonKey || safeScrutinId || safeDossierId;
 
         const heroTitle = String((ui as any)?.title ?? "")
   .replace(/^loi\s*:\s*/i, "")
@@ -1235,12 +1292,15 @@ const heroTitleLocked = isLoiSpeciale
             fromKey: "actu",
             fromLabel: heroTitleLocked || undefined,
             heroTitle: heroTitleLocked || undefined,
+            joParam: (ui as any)?.jo_date_promulgation ?? undefined,
             restoreId,
             restoreOffset,
             seedScrutin: seedScrutin || undefined,
-          },
-        } as any);
 
+ // ✅ JO (provenance externe)
+    jo: (ui as any)?.jo_date_promulgation ?? undefined,
+  },
+});
         return;
       }
 
@@ -1265,6 +1325,21 @@ const heroTitleLocked = isLoiSpeciale
 
   const renderRow = ({ item }: { item: Row }) => {
     if (item.kind === "header") return <SectionHeader title={item.title} />;
+    if ((item as any)?.item?.canonKey || (item as any)?.item?.loi_id_canon) {
+  console.log("[ACTU][ROW ITEM]", {
+    id: (item as any)?.item?.id,
+    title: (item as any)?.item?.title,
+    canonKey: (item as any)?.item?.canonKey,
+    loi_id_canon: (item as any)?.item?.loi_id_canon,
+    loi_id_scrutin: (item as any)?.item?.loi_id_scrutin,
+    dossier_id: (item as any)?.item?.dossier_id,
+    numero_scrutin: (item as any)?.item?.numero_scrutin,
+    statusKey: (item as any)?.item?.statusKey,
+    jo_date_promulgation: (item as any)?.item?.jo_date_promulgation,
+    statusScope: (item as any)?.item?.statusScope,
+  });
+}
+
     return (
       <ActuBulletinRow
         item={item.item as any}

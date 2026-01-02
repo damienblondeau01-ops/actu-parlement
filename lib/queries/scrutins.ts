@@ -1,5 +1,6 @@
 // lib/queries/scrutins.ts
 import { supabase } from "../supabaseClient";
+import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
 
 /**
  * Scrutin enrichi pour la fiche détail
@@ -152,8 +153,7 @@ async function fetchScrutinRowFromScrutinsData(
   if (key.kind === "loi_id") {
     // 1) eq strict
     {
-      const { data, error } = await supabase
-        .from("scrutins_data")
+      const { data, error } = await fromSafe(DB_VIEWS.SCRUTINS_DATA)
         .select(SCRUTINS_DATA_SELECT)
         .eq("loi_id", key.loi_id)
         .limit(1);
@@ -161,15 +161,15 @@ async function fetchScrutinRowFromScrutinsData(
       if (error) return { row: null, numeroResolved: "", error, key };
       if (data && data.length > 0) {
         const row = data[0] as any as ScrutinsDataRow;
-        const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || "";
+        const numeroResolved =
+          normalizeNumeroScrutin(String(row.numero ?? "")) || "";
         return { row, numeroResolved, error: null, key };
       }
     }
 
     // 2) fallback ilike prefix (au cas où)
     {
-      const { data, error } = await supabase
-        .from("scrutins_data")
+      const { data, error } = await fromSafe(DB_VIEWS.SCRUTINS_DATA)
         .select(SCRUTINS_DATA_SELECT)
         .ilike("loi_id", `${key.loi_id}%`)
         .limit(1);
@@ -177,7 +177,8 @@ async function fetchScrutinRowFromScrutinsData(
       if (error) return { row: null, numeroResolved: "", error, key };
       if (data && data.length > 0) {
         const row = data[0] as any as ScrutinsDataRow;
-        const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || "";
+        const numeroResolved =
+          normalizeNumeroScrutin(String(row.numero ?? "")) || "";
         return { row, numeroResolved, error: null, key };
       }
     }
@@ -191,8 +192,7 @@ async function fetchScrutinRowFromScrutinsData(
 
   // 1) eq strict
   {
-    const { data, error } = await supabase
-      .from("scrutins_data")
+    const { data, error } = await fromSafe(DB_VIEWS.SCRUTINS_DATA)
       .select(SCRUTINS_DATA_SELECT)
       .eq("numero", probe)
       .limit(1);
@@ -200,15 +200,15 @@ async function fetchScrutinRowFromScrutinsData(
     if (error) return { row: null, numeroResolved: "", error, key };
     if (data && data.length > 0) {
       const row = data[0] as any as ScrutinsDataRow;
-      const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || probe;
+      const numeroResolved =
+        normalizeNumeroScrutin(String(row.numero ?? "")) || probe;
       return { row, numeroResolved, error: null, key };
     }
   }
 
   // 2) fallback ilike prefix
   {
-    const { data, error } = await supabase
-      .from("scrutins_data")
+    const { data, error } = await fromSafe(DB_VIEWS.SCRUTINS_DATA)
       .select(SCRUTINS_DATA_SELECT)
       .ilike("numero", `${probe}%`)
       .limit(1);
@@ -216,7 +216,8 @@ async function fetchScrutinRowFromScrutinsData(
     if (error) return { row: null, numeroResolved: "", error, key };
     if (data && data.length > 0) {
       const row = data[0] as any as ScrutinsDataRow;
-      const numeroResolved = normalizeNumeroScrutin(String(row.numero ?? "")) || probe;
+      const numeroResolved =
+        normalizeNumeroScrutin(String(row.numero ?? "")) || probe;
       return { row, numeroResolved, error: null, key };
     }
   }
@@ -242,10 +243,17 @@ export async function fetchScrutinAvecVotes(
     console.log("[fetchScrutinAvecVotes] input =", raw);
     console.log(
       "[fetchScrutinAvecVotes] inputKey =",
-      inputKey ? `${inputKey.kind}:${inputKey.kind === "numero" ? inputKey.numero : inputKey.loi_id}` : "(empty)"
+      inputKey
+        ? `${inputKey.kind}:${
+            inputKey.kind === "numero" ? inputKey.numero : inputKey.loi_id
+          }`
+        : "(empty)"
     );
     if (inputNormalizedNumero) {
-      console.log("[fetchScrutinAvecVotes] inputNormalizedNumero =", inputNormalizedNumero);
+      console.log(
+        "[fetchScrutinAvecVotes] inputNormalizedNumero =",
+        inputNormalizedNumero
+      );
     }
 
     /* 1️⃣ Scrutin de base depuis scrutins_data */
@@ -258,7 +266,10 @@ export async function fetchScrutinAvecVotes(
     }
 
     if (!sd) {
-      console.warn("[fetchScrutinAvecVotes] aucun scrutin trouvé dans scrutins_data pour", raw);
+      console.warn(
+        "[fetchScrutinAvecVotes] aucun scrutin trouvé dans scrutins_data pour",
+        raw
+      );
       return { scrutin: null, votes: [], error: "SCRUTIN_NOT_FOUND" };
     }
 
@@ -269,7 +280,10 @@ export async function fetchScrutinAvecVotes(
     console.log("[fetchScrutinAvecVotes] resolvedFrom =", key?.kind ?? "unknown");
     console.log("[fetchScrutinAvecVotes] scrutins_data.loi_id =", sd.loi_id);
     console.log("[fetchScrutinAvecVotes] scrutins_data.numero =", sd.numero);
-    console.log("[fetchScrutinAvecVotes] numeroVotes (votes_deputes_detail) =", numeroVotes || "(empty)");
+    console.log(
+      "[fetchScrutinAvecVotes] numeroVotes (votes_deputes_detail) =",
+      numeroVotes || "(empty)"
+    );
 
     // ⚠️ Ici tu n’alimentes pas les scores (ils viennent d’ailleurs)
     const nb_pour: number | null = null;
@@ -306,7 +320,9 @@ export async function fetchScrutinAvecVotes(
 
     /* 2️⃣ Votes individuels depuis votes_deputes_detail */
     if (!numeroVotes) {
-      console.warn("[fetchScrutinAvecVotes] numeroVotes vide -> skip votes (fiche scrutin OK)");
+      console.warn(
+        "[fetchScrutinAvecVotes] numeroVotes vide -> skip votes (fiche scrutin OK)"
+      );
       return { scrutin, votes: [], error: null };
     }
 
@@ -317,8 +333,9 @@ export async function fetchScrutinAvecVotes(
     for (const leg of legislaturesToTry) {
       console.log("🔎 Recherche votes scrutin", numeroVotes, "en législature", leg);
 
-      const { data: votesRows, error: votesError } = await supabase
-        .from("votes_deputes_detail")
+      const { data: votesRows, error: votesError } = await fromSafe(
+        DB_VIEWS.VOTES_DEPUTES_DETAIL
+      )
         .select(
           `
           numero_scrutin,
@@ -357,10 +374,13 @@ export async function fetchScrutinAvecVotes(
     }
 
     if (votes.length === 0) {
-      console.log("[fetchScrutinAvecVotes] aucun vote en 17/16, fallback sans filtre législature");
+      console.log(
+        "[fetchScrutinAvecVotes] aucun vote en 17/16, fallback sans filtre législature"
+      );
 
-      const { data: votesRows, error: votesError } = await supabase
-        .from("votes_deputes_detail")
+      const { data: votesRows, error: votesError } = await fromSafe(
+        DB_VIEWS.VOTES_DEPUTES_DETAIL
+      )
         .select(
           `
           numero_scrutin,
@@ -383,7 +403,10 @@ export async function fetchScrutinAvecVotes(
 
       if (votesError) {
         lastVotesError = votesError;
-        console.warn("[fetchScrutinAvecVotes] err votes (fallback sans législature)", votesError);
+        console.warn(
+          "[fetchScrutinAvecVotes] err votes (fallback sans législature)",
+          votesError
+        );
       } else if (votesRows && votesRows.length > 0) {
         votes = votesRows as VoteDeputeScrutin[];
         console.log(
@@ -394,7 +417,10 @@ export async function fetchScrutinAvecVotes(
     }
 
     if (votes.length === 0 && lastVotesError) {
-      console.warn("[fetchScrutinAvecVotes] aucun vote trouvé, dernière erreur =", lastVotesError);
+      console.warn(
+        "[fetchScrutinAvecVotes] aucun vote trouvé, dernière erreur =",
+        lastVotesError
+      );
     }
 
     return { scrutin, votes, error: null };

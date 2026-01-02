@@ -10,6 +10,9 @@ export type ActuItem = {
   // ✅ IMPORTANT: doit être un "loi_id canon DB" quand dispo (ex: scrutin-public-...)
   loi_id?: string | null;
 
+  // ✅ B2.2: JO / Légifrance
+  jo_date_promulgation?: string | null;
+
   article_ref?: string | null;
   date: string;
   phase_label?: string | null;

@@ -1,7 +1,8 @@
 // lib/queries/amendements.ts
-import { supabase } from "@/lib/supabaseClient";
 import type { AmendementHighlight } from "@/components/loi/AmendementsHighlights";
 import { routeFromItemId } from "@/lib/routes";
+import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
+
 
 export type AmendementContractRow = {
   loi_id: string;
@@ -31,8 +32,7 @@ export async function fetchAmendementsByLoi(loiId: string | null | undefined) {
   const safe = String(loiId ?? "").trim();
   if (!safe) return [];
 
-  const { data, error } = await supabase
-    .from("amendements_loi_contract_v1")
+  const { data, error } = await fromSafe(DB_VIEWS.AMENDEMENTS_LOI_CONTRACT_V1)
     .select(
       "loi_id,numero_scrutin,date_amendement,amendement_uid,titre,article_ref,context_label,author_label,author_group,preview,outcome_norm,outcome_label"
     )

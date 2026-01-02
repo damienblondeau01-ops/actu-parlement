@@ -12,7 +12,11 @@ export const DB_VIEWS = {
   // Lois (list + détail)
   LOIS_APP: "lois_app",
   LOIS_RECENT: "lois_recent",
+  LOI_JO_STATUS: "loi_jo_status",
   LOIS_MAPPING: "lois_mapping",
+  SCRUTINS_LOI_ENRICHIS_UNIFIED: "scrutins_loi_enrichis_unified",
+  LOI_PROCEDURE_APP: "loi_procedure_app",
+
 
   // ✅ Feed canon (v2)
   LOIS_CANON_FEED: "lois_canon_feed_v2_canon",
@@ -22,6 +26,10 @@ export const DB_VIEWS = {
   SCRUTINS_PAR_LOI_CANON_APP: "scrutins_par_loi_canon_app", // ✅ NEW
   SCRUTINS_DATA: "scrutins_data",
   SCRUTINS_LOI_ENRICHIS: "scrutins_loi_enrichis",
+  VOTES_DEPUTES_DETAIL: "votes_deputes_detail",
+
+  // ✅ Amendements
+  AMENDEMENTS_LOI_CONTRACT_V1: "amendements_loi_contract_v1",
 
   // Votes
   VOTES_PAR_SCRUTIN_SYNTHESE: "votes_par_scrutin_synthese",

@@ -1,5 +1,7 @@
-// lib/queries/votes.ts
+﻿// lib/queries/votes.ts
 import { supabase } from "@/lib/supabase"; // ✅ adapte si ton client supabase est ailleurs
+import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
+
 
 export type VoteGroupeRow = {
   numero_scrutin: string;
@@ -7,7 +9,7 @@ export type VoteGroupeRow = {
   groupe: string; // code (POxxx) ou abrév (RN, LFI...)
   groupe_label?: string;
 
-  position_majoritaire?: string; // POUR / CONTRE / ABSTENTION / DIVISÉ
+  position_majoritaire?: string; // POUR / CONTRE / ABSTENTION
   pour: number;
   contre: number;
   abstention: number;
@@ -24,7 +26,6 @@ function s(x: any) {
 
 /**
  * ✅ Mapping ultra-robuste selon les colonnes réelles
- * - accepte plusieurs variantes de noms
  */
 function mapRow(r: any): VoteGroupeRow | null {
   const numero_scrutin =
@@ -43,30 +44,20 @@ function mapRow(r: any): VoteGroupeRow | null {
   const groupe_label =
     s(r?.groupe_label) || s(r?.libelle_groupe) || s(r?.groupe_nom) || "";
 
-  const position_majoritaire =
-    s(r?.position_majoritaire) ||
-    s(r?.position) ||
-    s(r?.position_majoritaire_label) ||
-    "";
-
-  const pour = n(r?.pour ?? r?.nb_pour ?? r?.votes_pour);
-  const contre = n(r?.contre ?? r?.nb_contre ?? r?.votes_contre);
-  const abstention = n(r?.abstention ?? r?.nb_abstention ?? r?.votes_abstention);
-
   return {
     numero_scrutin,
     groupe: groupe || groupe_label || "Groupe",
     groupe_label: groupe_label || undefined,
-    position_majoritaire: position_majoritaire || undefined,
-    pour,
-    contre,
-    abstention,
+    position_majoritaire: undefined,
+    pour: 0,
+    contre: 0,
+    abstention: 0,
   };
 }
 
 /**
  * ✅ Lit votes par groupes (table/view: votes_groupes_scrutin_full)
- * - Retourne un tableau de VoteGroupeRow normalisé.
+ * - Retourne un tableau de VoteGroupeRow normalisé (PIVOT)
  */
 export async function fetchVotesGroupesForScrutins(
   scrutinIds: string[],
@@ -75,24 +66,57 @@ export async function fetchVotesGroupesForScrutins(
   const ids = (scrutinIds ?? []).map(s).filter(Boolean);
   if (ids.length === 0) return [];
 
-  // ⚠️ Table / view attendue : public.votes_groupes_scrutin_full
-  // Si ton nom réel diffère, change ici UNIQUEMENT.
-  const { data, error } = await supabase
-    .from("votes_groupes_scrutin_full")
-    .select("*")
+  const { data, error } = await fromSafe(DB_VIEWS.VOTES_DEPUTES_DETAIL)
+    .select("numero_scrutin,groupe,groupe_abrev,groupe_nom,position,nb_voix")
     .in("numero_scrutin", ids)
     .limit(ids.length * limitPerScrutin);
 
   if (error) {
-    // log utile
-    console.log("[VOTES][fetchVotesGroupesForScrutins] error =", error?.message ?? error);
+    console.log(
+      "[VOTES][fetchVotesGroupesForScrutins] error =",
+      error?.message ?? error
+    );
     return [];
   }
 
-  const out: VoteGroupeRow[] = [];
-  for (const r of (data ?? []) as any[]) {
-    const rr = mapRow(r);
-    if (rr) out.push(rr);
+  /* ===============================
+     ✅ CORRECTION : PIVOT LONG → UI
+     =============================== */
+
+  const byKey = new Map<string, VoteGroupeRow>();
+
+  for (const r of data ?? []) {
+    const base = mapRow(r);
+    if (!base) continue;
+
+    const key = `${base.numero_scrutin}__${base.groupe}`;
+    const row =
+      byKey.get(key) ??
+      {
+        ...base,
+        pour: 0,
+        contre: 0,
+        abstention: 0,
+      };
+
+    const pos = s(r?.position).toUpperCase();
+    const nb = n(r?.nb_voix);
+
+    if (pos.includes("POUR")) row.pour += nb;
+    else if (pos.includes("CONTRE")) row.contre += nb;
+    else if (pos.includes("ABST")) row.abstention += nb;
+
+    byKey.set(key, row);
   }
-  return out;
+
+  // calcul position majoritaire
+  for (const row of byKey.values()) {
+    const max = Math.max(row.pour, row.contre, row.abstention);
+    if (max === 0) row.position_majoritaire = undefined;
+    else if (row.pour === max) row.position_majoritaire = "POUR";
+    else if (row.contre === max) row.position_majoritaire = "CONTRE";
+    else row.position_majoritaire = "ABSTENTION";
+  }
+
+  return Array.from(byKey.values());
 }

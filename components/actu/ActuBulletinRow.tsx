@@ -28,6 +28,9 @@ type BulletinItem = ActuItemUI & {
   loi_id_scrutin?: string | null;
   dossier_id?: string | null;
   numero_scrutin?: string | null;
+
+  // ✅ optionnel (peut être défini depuis index.tsx)
+  statusScope?: "Texte" | "Scrutin" | "Amendement" | "Vote" | "Événement";
 };
 
 /* ─────────────────────────────
@@ -122,7 +125,11 @@ function inferTheme(item?: Partial<BulletinItem>): string | undefined {
   )
     return "travail";
 
-  if (has(/\b(logement|immobilier|loyer|urbanisme|construction|renovation|habitat|foncier)\b/))
+  if (
+    has(
+      /\b(logement|immobilier|loyer|urbanisme|construction|renovation|habitat|foncier)\b/
+    )
+  )
     return "logement";
 
   if (
@@ -210,7 +217,7 @@ function formatDayMonth(dateISO?: string) {
 
 function statusScopeFromSubtitle(
   sub?: string | null
-): "Scrutin" | "Amendement" | "Vote" | "Événement" {
+): "Texte" | "Scrutin" | "Amendement" | "Vote" | "Événement" {
   const s = norm(sub);
   if (!s) return "Événement";
   if (s.includes("amendement")) return "Amendement";
@@ -224,7 +231,7 @@ function StatusBadge({
   scope,
 }: {
   status?: StatusKey;
-  scope: "Scrutin" | "Amendement" | "Vote" | "Événement";
+  scope: "Texte" | "Scrutin" | "Amendement" | "Vote" | "Événement";
 }) {
   const s: StatusKey = status || "pending";
 
@@ -254,7 +261,12 @@ function StatusBadge({
         };
 
   return (
-    <View style={[styles.statusPill, { backgroundColor: cfg.bg, borderColor: cfg.bd }]}>
+    <View
+      style={[
+        styles.statusPill,
+        { backgroundColor: cfg.bg, borderColor: cfg.bd },
+      ]}
+    >
       <View style={[styles.statusDot, { backgroundColor: cfg.dot }]} />
       <Text style={[styles.statusText, { color: cfg.fg }]} numberOfLines={1}>
         {cfg.label}
@@ -307,7 +319,20 @@ export default function ActuBulletinRow({
   );
 
   const signal = pal?.accent ?? typeAccent;
-  const scope = useMemo(() => statusScopeFromSubtitle(item?.subtitle), [item?.subtitle]);
+
+  // ✅ B2.2: override statut si JO/promptulgation présent
+  const isPromulguee = !!(item as any)?.jo_date_promulgation;
+
+  // ✅ MIN FIX: si le parent fournit statusScope, on le respecte.
+  const scope = useMemo(() => {
+    const explicit = (item as any)?.statusScope;
+    if (explicit) return explicit as any;
+
+    const canon = String((item as any)?.loi_id_canon ?? "").trim().toLowerCase();
+    const isLoi = canon.startsWith("loi:");
+    return isLoi ? "Texte" : statusScopeFromSubtitle(item?.subtitle);
+  }, [item]);
+
   const typeIcon = useMemo(
     () => eventTypeIconName(item?.tag, item?.subtitle),
     [item?.tag, item?.subtitle]
@@ -336,18 +361,25 @@ export default function ActuBulletinRow({
 
     const href = itemId ? routeFromItemId(String(itemId)) : null;
 
+    console.log("[ACTU CARD] href =", href);
+
     // ✅ Si on peut router proprement, on le fait ici (évite le mauvais mapping du parent)
     if (href) {
       router.push(href as any);
       return;
     }
 
+    console.log("[ACTU CARD] fallback => onPress()");
+
     // Fallback: comportement historique
     onPress?.();
   }, [item, onPress, router]);
 
   return (
-    <Pressable onPress={handlePress} style={({ pressed }) => [styles.wrap, pressed && styles.pressed]}>
+    <Pressable
+      onPress={handlePress}
+      style={({ pressed }) => [styles.wrap, pressed && styles.pressed]}
+    >
       <View style={styles.timeline}>
         {!!hour && <Text style={styles.time}>{hour}</Text>}
         <View style={styles.dotCol}>
@@ -363,7 +395,10 @@ export default function ActuBulletinRow({
           <View style={styles.paperHighlight} />
         </View>
 
-        <View pointerEvents="none" style={[styles.accentEdge, { backgroundColor: signal }]} />
+        <View
+          pointerEvents="none"
+          style={[styles.accentEdge, { backgroundColor: signal }]}
+        />
 
         {!!thumb && (
           <View style={styles.thumbWrap}>
@@ -376,9 +411,15 @@ export default function ActuBulletinRow({
             <View style={styles.signalRow}>
               <View style={[styles.colorDot, { backgroundColor: signal }]} />
               <View style={styles.typeIconChip}>
-                <MaterialCommunityIcons name={typeIcon as any} size={13} color={INK} />
+                <MaterialCommunityIcons
+                  name={typeIcon as any}
+                  size={13}
+                  color={INK}
+                />
               </View>
-              <Text style={styles.tagText}>{(item?.tag ?? "ACTU").toUpperCase()}</Text>
+              <Text style={styles.tagText}>
+                {(item?.tag ?? "ACTU").toUpperCase()}
+              </Text>
             </View>
 
             {!!item?.statsLine && (
@@ -417,7 +458,33 @@ export default function ActuBulletinRow({
             </Text>
           )}
 
-          <StatusBadge status={item?.statusKey} scope={scope} />
+          {/* ✅ B2.2: si promulguée (JO) => override du badge de statut */}
+          {isPromulguee ? (
+            <View
+              style={[
+                styles.statusPill,
+                {
+                  backgroundColor: "rgba(29,78,216,0.06)",
+                  borderColor: "rgba(18,20,23,0.10)",
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: "rgba(29,78,216,0.85)" },
+                ]}
+              />
+              <Text
+                style={[styles.statusText, { color: "rgba(18,20,23,0.86)" }]}
+                numberOfLines={1}
+              >
+                🔵 Promulguée
+              </Text>
+            </View>
+          ) : (
+            <StatusBadge status={item?.statusKey} scope={scope} />
+          )}
         </View>
 
         <View style={styles.chevron}>

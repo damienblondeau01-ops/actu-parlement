@@ -1,6 +1,6 @@
-import React from "react";
+﻿import React from "react";
 import { View, Text, StyleSheet } from "react-native";
-import { theme } from "@lib/theme";
+import { theme } from "@/lib/theme";
 
 export type DataScope = "ANALYTICS_L16" | "RECENT_L17" | "MIXED";
 
@@ -14,21 +14,21 @@ function getBadge(scope: DataScope) {
   switch (scope) {
     case "ANALYTICS_L16":
       return {
-        label: "Analyse — 16ᵉ législature",
+        label: "Analyse â€” 16áµ‰ lÃ©gislature",
         sub: "Scores & tendances",
         tone: "info" as const,
       };
     case "RECENT_L17":
       return {
-        label: "Actualité — 17ᵉ législature",
-        sub: "Votes récents",
+        label: "ActualitÃ© â€” 17áµ‰ lÃ©gislature",
+        sub: "Votes rÃ©cents",
         tone: "ok" as const,
       };
     case "MIXED":
     default:
       return {
-        label: "Mixte — 16ᵉ + 17ᵉ",
-        sub: "Analyse + actualité",
+        label: "Mixte â€” 16áµ‰ + 17áµ‰",
+        sub: "Analyse + actualitÃ©",
         tone: "warn" as const,
       };
   }
@@ -111,3 +111,4 @@ const stylesSm = StyleSheet.create({
   label: { fontSize: 11 },
   sub: { fontSize: 10 },
 });
+

@@ -1,0 +1,100 @@
+﻿// lib/queries/votes.ts
+import { supabase } from "@/lib/supabase"; // âœ… adapte si ton client supabase est ailleurs
+
+export type VoteGroupeRow = {
+  numero_scrutin: string;
+
+  groupe: string; // code (POxxx) ou abrÃ©v (RN, LFI...)
+  groupe_label?: string;
+
+  position_majoritaire?: string; // POUR / CONTRE / ABSTENTION / DIVISÃ‰
+  pour: number;
+  contre: number;
+  abstention: number;
+};
+
+function n(x: any) {
+  const v = Number(x ?? 0);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function s(x: any) {
+  return String(x ?? "").trim();
+}
+
+/**
+ * âœ… Mapping ultra-robuste selon les colonnes rÃ©elles
+ * - accepte plusieurs variantes de noms
+ */
+function mapRow(r: any): VoteGroupeRow | null {
+  const numero_scrutin =
+    s(r?.numero_scrutin) || s(r?.scrutin_id) || s(r?.scrutin) || "";
+  if (!numero_scrutin) return null;
+
+  const groupe =
+    s(r?.groupe) ||
+    s(r?.groupe_abrev) ||
+    s(r?.groupe_abbreviation) ||
+    s(r?.groupe_code) ||
+    s(r?.groupe_uid) ||
+    s(r?.groupe_sigle) ||
+    "";
+
+  const groupe_label =
+    s(r?.groupe_label) || s(r?.libelle_groupe) || s(r?.groupe_nom) || "";
+
+  const position_majoritaire =
+    s(r?.position_majoritaire) ||
+    s(r?.position) ||
+    s(r?.position_majoritaire_label) ||
+    "";
+
+  const pour = n(r?.pour ?? r?.nb_pour ?? r?.votes_pour);
+  const contre = n(r?.contre ?? r?.nb_contre ?? r?.votes_contre);
+  const abstention = n(r?.abstention ?? r?.nb_abstention ?? r?.votes_abstention);
+
+  return {
+    numero_scrutin,
+    groupe: groupe || groupe_label || "Groupe",
+    groupe_label: groupe_label || undefined,
+    position_majoritaire: position_majoritaire || undefined,
+    pour,
+    contre,
+    abstention,
+  };
+}
+
+/**
+ * âœ… Lit votes par groupes (table/view: votes_groupes_scrutin_full)
+ * - Retourne un tableau de VoteGroupeRow normalisÃ©.
+ */
+export async function fetchVotesGroupesForScrutins(
+  scrutinIds: string[],
+  limitPerScrutin = 40
+): Promise<VoteGroupeRow[]> {
+  const ids = (scrutinIds ?? []).map(s).filter(Boolean);
+  if (ids.length === 0) return [];
+
+  // âš ï¸ Table / view attendue : public.votes_groupes_scrutin_full
+  // Si ton nom rÃ©el diffÃ¨re, change ici UNIQUEMENT.
+  const { data, error } = await supabase
+    .from("votes_groupes_scrutin_full")
+    .select("numero_scrutin,groupe,position,nb_voix")
+    .in("numero_scrutin", ids)
+    .limit(ids.length * limitPerScrutin);
+
+  if (error) {
+    // log utile
+    console.log("[VOTES][fetchVotesGroupesForScrutins] error =", error?.message ?? error);
+    return [];
+  }
+
+  const out: VoteGroupeRow[] = [];
+  for (const r of (data ?? []) as any[]) {
+    const rr = mapRow(r);
+    if (rr) out.push(rr);
+  }
+  return out;
+}
+
+

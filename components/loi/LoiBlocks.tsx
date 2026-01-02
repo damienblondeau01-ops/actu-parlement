@@ -16,6 +16,8 @@ import { Card } from "../ui/Card";
 import { SectionTitle } from "../ui/SectionTitle";
 import { Chip } from "../ui/Chip";
 import { Ionicons } from "@expo/vector-icons";
+import ImportantCard from "@/components/ui/ImportantCard";
+
 
 export type LoiScreenModel = {
   title: string;
@@ -53,6 +55,13 @@ export type LoiScreenModel = {
     groupLabel: string;
     voteLabel?: "POUR" | "CONTRE" | "ABSTENTION" | "NV" | string;
   };
+
+  jo?: {
+  datePromulgation?: string | null;
+  urlPromulgation?: string | null;
+  sourceLabel?: string | null;
+};
+
 };
 
 const muted = theme.colors.subtext;
@@ -112,7 +121,7 @@ export function LoiAIIntroBlock({ m }: { m: LoiScreenModel }) {
   const visibleLines = expanded ? lines : lines.slice(0, 3);
 
   return (
-    <Card style={styles.aiCard}>
+  <ImportantCard style={styles.aiCard}>
       <View style={styles.aiHalo} />
 
       <View style={styles.aiInner}>
@@ -147,7 +156,7 @@ export function LoiAIIntroBlock({ m }: { m: LoiScreenModel }) {
           </Pressable>
         )}
       </View>
-    </Card>
+    </ImportantCard>
   );
 }
 

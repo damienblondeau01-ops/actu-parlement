@@ -1,6 +1,13 @@
 // lib/queries/lois.ts
 import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
 
+import { fetchLoiProcedure, type LoiProcedureStep } from "@/lib/queries/procedure";
+import {
+  buildProcedureTimeline,
+  type CanonTimelineStep,
+} from "@/lib/lois/procedureCanon";
+
+
 /**
  * =========================
  *  LISTE + FOCUS (lois_app)
@@ -1132,5 +1139,23 @@ export async function fetchScrutinAvecVotesByAnyId(idOrSlug: string) {
   const totaux = await fetchScrutinTotaux(numero_scrutin);
 
   return { scrutin, totaux };
+}
+// ✅ Option A: couche "lois.ts" -> retourne un modèle UI-ready
+export async function fetchLoiProcedureCanon(
+  loiId: string,
+  joDate?: string | null,
+  limit = 200
+): Promise<CanonTimelineStep[]> {
+  const dossierId = await resolveDossierIdFromCanonKey(loiId);
+  const { steps: procedureSteps, error: procedureError } = await fetchLoiProcedure({
+  dossierId,
+  loiId,
+});
+
+if (procedureError) {
+  console.warn("[lois.ts] fetchLoiProcedure error =", procedureError);
+}
+  return buildProcedureTimeline(procedureSteps as any, joDate ?? null);
+
 }
 
