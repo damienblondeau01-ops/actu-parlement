@@ -1,7 +1,7 @@
-// app/(tabs)/lois/[id]/index.tsx
-// ✅ SQUELETTE CANON v0.1 — “Bulletin (papier)”
-// Objectif: structure + règles d’affichage (pas de logique métier complexe)
-// ✅ Ici: on branche le MINIMUM fiable : Header + Timeline depuis DB (fetchLoiDetail / fetchLoiTimeline)
+﻿// app/(tabs)/lois/[id]/index.tsx
+// âœ… SQUELETTE CANON v0.1 â€” â€œBulletin (papier)â€
+// Objectif: structure + rÃ¨gles dâ€™affichage (pas de logique mÃ©tier complexe)
+// âœ… Ici: on branche le MINIMUM fiable : Header + Timeline depuis DB (fetchLoiDetail / fetchLoiTimeline)
 // Le reste (TLDR IA / Votes / Measures / Sources riches) viendra ensuite.
 
 import React, {
@@ -19,7 +19,7 @@ import {
   View,
   Pressable,
   LayoutChangeEvent,
-  Linking, // ✅ FIX: ouvrir les liens externes (https://...)
+  Linking, // âœ… FIX: ouvrir les liens externes (https://...)
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -30,7 +30,7 @@ import {
   fetchLoiTimelineCanon,
   fetchLoiSources,
   fetchLoiTexte,
-  fetchScrutinTotauxForScrutins, // ✅ NEW (pas utilisé ici mais on ne touche pas)
+  fetchScrutinTotauxForScrutins as _fetchScrutinTotauxForScrutins, // âœ… NEW (pas utilisÃ© ici mais on ne touche pas)
   fetchLoiProcedureCanon,
 } from "../../../../lib/queries/lois";
 import type {
@@ -50,17 +50,17 @@ import type { EnClairItem } from "@/lib/ai/types";
 import { supabase } from "@/lib/supabaseClient";
 import LoiPromulgationBlock from "@/components/loi/LoiPromulgationBlock";
 
-// ✅ Votes (V0) — par scrutin / par groupes
+// âœ… Votes (V0) â€” par scrutin / par groupes
 import {
   fetchVotesGroupesForScrutins,
   type VoteGroupeRow,
 } from "@/lib/queries/votes";
 
-// ✅ regroupement canon (UI-only)
+// âœ… regroupement canon (UI-only)
 import { groupTimelineByYear } from "@/lib/loi/timelineCanon";
 
 /** =========================
- *  ✅ THÈME “PAPIER” (comme Actu)
+ *  âœ… THÃˆME â€œPAPIERâ€ (comme Actu)
  *  ========================= */
 const PAPER = "#F6F1E8";
 const PAPER_CARD = "#FBF7F0";
@@ -74,26 +74,29 @@ type RouteParams = {
 
   joParam?: string;
 
-  // ✅ JO (source externe propagée depuis Actu)
+  // âœ… JO (source externe propagÃ©e depuis Actu)
   jo?: string;
+
+  timelineQueryKey?: string;
 
   // provenance
   fromKey?: string;
   fromLabel?: string;
 
-  // ✅ titre éditorial (citoyen) propagé depuis Actu
+  // âœ… titre Ã©ditorial (citoyen) propagÃ© depuis Actu
   heroTitle?: string;
 
-  // ✅ fallback si DB vide
+  // âœ… fallback si DB vide
   seedScrutin?: string;
 
-  // ✅ restore Actu
+  // âœ… restore Actu
   restoreId?: string;
   restoreOffset?: string;
 
   anchor?:
-    | "resume" // ✅ A1
+    | "resume" // âœ… A1
     | "tldr"
+    | "procedure"
     | "context"
     | "impact"
     | "timeline"
@@ -103,10 +106,10 @@ type RouteParams = {
 };
 
 /** =========================
- *  ✅ RÉSUMÉ V0 (MANUEL) — A1
+ *  âœ… RÃ‰SUMÃ‰ V0 (MANUEL) â€” A1
  *  =========================
- *  Règle: bloc statique, écrit à la main, uniquement pour la loi spéciale.
- *  Objectif: tester la lisibilité citoyenne, avant automatisation IA.
+ *  RÃ¨gle: bloc statique, Ã©crit Ã  la main, uniquement pour la loi spÃ©ciale.
+ *  Objectif: tester la lisibilitÃ© citoyenne, avant automatisation IA.
  */
 type ResumeV0 = {
   title?: string;
@@ -117,11 +120,11 @@ function isLoiSpecialeKey(canonKey: string, id: string) {
   const ck = String(canonKey ?? "").toLowerCase();
   const _id = String(id ?? "").toLowerCase();
 
-  // ✅ déclencheurs robustes (canonKey "loi:..." ou slug "scrutin-public-...loi-speciale...")
+  // âœ… dÃ©clencheurs robustes (canonKey "loi:..." ou slug "scrutin-public-...loi-speciale...")
   if (ck.includes("loi-speciale")) return true;
   if (_id.includes("loi-speciale")) return true;
 
-  // ✅ si jamais le canonKey est "loi:...article-45..." (loi spéciale art. 45)
+  // âœ… si jamais le canonKey est "loi:...article-45..." (loi spÃ©ciale art. 45)
   if (ck.includes("article-45") && ck.includes("loi:")) return true;
   if (_id.includes("article-45") && _id.includes("scrutin-public-")) return true;
 
@@ -138,18 +141,18 @@ type CanonProof = {
 
 type CanonTLDRBullet = {
   text: string;
-  proof: CanonProof; // ✅ obligatoire
+  proof: CanonProof; // âœ… obligatoire
 };
 
 type CanonHeader = {
   title: string;
   status:
-    | "Adoptée"
+    | "AdoptÃ©e"
     | "En cours"
-    | "Rejetée"
-    | "Retirée"
-    | "Promulguée"
-    | "—";
+    | "RejetÃ©e"
+    | "RetirÃ©e"
+    | "PromulguÃ©e"
+    | "â€”";
   lastStepLabel: string;
   lastStepDate: string;
   oneLiner: string;
@@ -186,7 +189,7 @@ type CanonVotes = {
     pour: number;
     contre: number;
     abstention: number;
-    positionMajoritaire: "POUR" | "CONTRE" | "ABSTENTION" | "DIVISÉ";
+    positionMajoritaire: "POUR" | "CONTRE" | "ABSTENTION" | "DIVISÃ‰";
   }>;
 };
 
@@ -213,8 +216,8 @@ type CanonModel = {
 };
 
 /** =========================
- *  ✅ TYPE PROCÉDURE (Dossier AN/Sénat)
- *  ✅ Fix TS: on n’utilise PAS CanonTimelineStep importé (mauvais shape)
+ *  âœ… TYPE PROCÃ‰DURE (Dossier AN/SÃ©nat)
+ *  âœ… Fix TS: on nâ€™utilise PAS CanonTimelineStep importÃ© (mauvais shape)
  *  -> on type local = exactement ce que le rendu utilise
  *  ========================= */
 type ProcedureTimelineStep = {
@@ -261,7 +264,7 @@ function ProofLink({
 }) {
   return (
     <Pressable onPress={() => onPress(p.href)} style={styles.proofPill}>
-      <Text style={styles.proofText}>↳ {p.label}</Text>
+      <Text style={styles.proofText}>â†³ {p.label}</Text>
     </Pressable>
   );
 }
@@ -285,7 +288,7 @@ function Fold({
           <Text style={styles.foldTitle}>{title}</Text>
           {!!subtitle && <Text style={styles.foldSub}>{subtitle}</Text>}
         </View>
-        <Text style={styles.foldIcon}>{open ? "—" : "+"}</Text>
+        <Text style={styles.foldIcon}>{open ? "â€”" : "+"}</Text>
       </Pressable>
       {open ? <View style={{ paddingTop: 10 }}>{children}</View> : null}
     </View>
@@ -295,7 +298,7 @@ function Fold({
 function toLoiSourcesUI(rows: any[]): LoiSourceItem[] {
   return (Array.isArray(rows) ? rows : [])
     .map((r) => {
-      // cas où c'est déjà au bon format UI
+      // cas oÃ¹ c'est dÃ©jÃ  au bon format UI
       if (r && typeof r === "object" && "url" in r && "label" in r) {
         return r as LoiSourceItem;
       }
@@ -312,8 +315,8 @@ function toLoiSourcesUI(rows: any[]): LoiSourceItem[] {
 }
 
 /** =========================
- *  ✅ Canon helper (copie légère depuis Actu)
- *  - but: si l'écran reçoit un slug "scrutin-public-..." on reconstruit "loi:..."
+ *  âœ… Canon helper (copie lÃ©gÃ¨re depuis Actu)
+ *  - but: si l'Ã©cran reÃ§oit un slug "scrutin-public-..." on reconstruit "loi:..."
  *  ========================= */
 function cleanSpaces(s: string) {
   return String(s ?? "").replace(/\s+/g, " ").trim();
@@ -323,7 +326,7 @@ function slugifyFR(input: string) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/['’]/g, "-")
+    .replace(/['â€™]/g, "-")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
@@ -334,13 +337,13 @@ function extractLawCoreFromSentence(sentence: string): string {
 
   const noParen = s.replace(/\s*\([^)]*\)\s*$/g, "").trim();
 
-  let x = noParen.replace(/^l['’]?\s*/i, "l'");
-  x = x.replace(/^l['’]ensemble\s+du\s+/i, "");
-  x = x.replace(/^l['’]ensemble\s+de\s+la\s+/i, "");
-  x = x.replace(/^l['’]article\s+unique\s+du\s+/i, "");
-  x = x.replace(/^l['’]article\s+premier\s+du\s+/i, "");
-  x = x.replace(/^l['’]article\s+\w+\s+du\s+/i, "");
-  x = x.replace(/^l['’]amendement[^,]*\s+à\s+/i, "");
+  let x = noParen.replace(/^l['â€™]?\s*/i, "l'");
+  x = x.replace(/^l['â€™]ensemble\s+du\s+/i, "");
+  x = x.replace(/^l['â€™]ensemble\s+de\s+la\s+/i, "");
+  x = x.replace(/^l['â€™]article\s+unique\s+du\s+/i, "");
+  x = x.replace(/^l['â€™]article\s+premier\s+du\s+/i, "");
+  x = x.replace(/^l['â€™]article\s+\w+\s+du\s+/i, "");
+  x = x.replace(/^l['â€™]amendement[^,]*\s+Ã \s+/i, "");
   x = cleanSpaces(x);
 
   const low = x.toLowerCase();
@@ -455,7 +458,7 @@ export default function LoiDetailCanonScreen() {
   const params = useLocalSearchParams<RouteParams>();
   const scrollRef = useRef<ScrollView>(null);
 
-  // ✅ helper local (seed) : corrige le suffixe tronqué "-de-la-lo" -> "-de-la-loi"
+  // âœ… helper local (seed) : corrige le suffixe tronquÃ© "-de-la-lo" -> "-de-la-loi"
   const fixTail = (k: string) =>
     String(k ?? "")
       .trim()
@@ -477,7 +480,7 @@ export default function LoiDetailCanonScreen() {
     return "";
   }, [params]);
 
-  // ✅ LOCK heroTitle au mount (ne doit jamais être écrasé)
+  // âœ… LOCK heroTitle au mount (ne doit jamais Ãªtre Ã©crasÃ©)
   const pHeroTitle = String((params as any)?.heroTitle ?? "").trim();
   const pFromLabel = String((params as any)?.fromLabel ?? "").trim();
   const lockedHeroTitleRef = useRef<string>("");
@@ -487,9 +490,9 @@ export default function LoiDetailCanonScreen() {
   const lockedHeroTitle = lockedHeroTitleRef.current;
 
   /**
-   * ✅ LOI KEY (ultra robuste)
-   * - priorité canonKey si "loi:..."
-   * - sinon si id ressemble à un slug "scrutin-public-..." -> canonFromSlug -> "loi:..."
+   * âœ… LOI KEY (ultra robuste)
+   * - prioritÃ© canonKey si "loi:..."
+   * - sinon si id ressemble Ã  un slug "scrutin-public-..." -> canonFromSlug -> "loi:..."
    * - sinon id
    */
   const loiKey = useMemo(() => {
@@ -504,17 +507,39 @@ export default function LoiDetailCanonScreen() {
   }, [params, id]);
 
   /**
-   * ✅ RESTORE TIMELINE QUERY KEY (anti-casse)
+   * âœ… RESTORE TIMELINE QUERY KEY (anti-casse)
    * - si on a un slug "scrutin-..." -> on l'utilise (source "scrutins_data", nickel)
-   * - sinon fallback canonKey "loi:..." (fetchLoiTimeline résout / ou canon tente d’abord)
+   * - sinon fallback canonKey "loi:..." (fetchLoiTimeline rÃ©sout / ou canon tente dâ€™abord)
    */
   const timelineQueryKey = useMemo(() => {
+    const v = (params as any)?.timelineQueryKey;
+    const tq =
+      typeof v === "string"
+        ? v.trim()
+        : Array.isArray(v)
+        ? String(v[0] ?? "").trim()
+        : "";
+
+    // ✅ priorité: timelineQueryKey fourni par Actu (scrutin-public-...)
+    if (tq) return tq;
+
+    // ✅ sinon ton comportement actuel
     if (id?.startsWith("scrutin-")) return id;
+
     const ck = String((params as any)?.canonKey ?? "").trim();
     if (ck) return ck;
+
     return "";
   }, [id, params]);
 
+useEffect(() => {
+    console.log("[TEST3][TIMELINE KEY RESOLUTION]", {
+      id,
+      param_timelineQueryKey: (params as any)?.timelineQueryKey,
+      resolved: timelineQueryKey,
+    });
+  }, [id, params, timelineQueryKey]);
+  
   const fromKey = useMemo(() => {
     const v = (params as any)?.fromKey;
     if (typeof v === "string") return v.trim();
@@ -537,7 +562,7 @@ export default function LoiDetailCanonScreen() {
   }, [params]);
 
   const joParam = useMemo(() => {
-    // ✅ Actu envoie "joParam"
+    // âœ… Actu envoie "joParam"
     const v = (params as any)?.joParam ?? (params as any)?.jo; // fallback ancien
     if (typeof v === "string") return v.trim();
     if (Array.isArray(v)) return String(v[0] ?? "").trim();
@@ -565,13 +590,13 @@ export default function LoiDetailCanonScreen() {
     return "";
   }, [params]);
 
-  // ✅ Titre humain depuis canonKey/slug — fallback si DB n’a pas de titre
+  // âœ… Titre humain depuis canonKey/slug â€” fallback si DB nâ€™a pas de titre
   const titleFromId = useMemo(
     () => titleFromCanonKey(canonKey || id),
     [canonKey, id]
   );
 
-  // ✅ Retour intelligent : si on vient d'Actu => on revient sur Actu en restaurant l’item, sinon back normal
+  // âœ… Retour intelligent : si on vient d'Actu => on revient sur Actu en restaurant lâ€™item, sinon back normal
   const goBackSmart = () => {
     if (fromKey === "actu") {
       router.replace({
@@ -593,16 +618,18 @@ export default function LoiDetailCanonScreen() {
   const [loiTitle, setLoiTitle] = useState<string | null>(null);
   const [timelineRows, setTimelineRows] = useState<LoiTimelineRow[]>([]);
 
-  // ✅ DB-first: sources + texte + IA “En clair”
+  // âœ… DB-first: sources + texte + IA â€œEn clairâ€
   const [sources, setSources] = useState<LoiSourceItem[]>([]);
   const [loiTexte, setLoiTexte] = useState<LoiTexteRow | null>(null);
   const [enClair, setEnClair] = useState<EnClairItem[]>([]);
 
+  // âœ… ProcÃ©dure (canon) â€” Ã©tat cohÃ©rent avec le rendu
   const [procedureTimeline, setProcedureTimeline] = useState<
     ProcedureTimelineStep[]
   >([]);
+  const [procedureLoading, setProcedureLoading] = useState(false);
 
-  // ✅ Votes (V0): par scrutin -> par groupes
+  // âœ… Votes (V0): par scrutin -> par groupes
   const [votesByScrutin, setVotesByScrutin] = useState<
     Record<string, VoteGroupeRow[]>
   >({});
@@ -611,12 +638,12 @@ export default function LoiDetailCanonScreen() {
     {}
   );
 
-  // ✅ Totaux fallback depuis scrutins_data (même source que la fiche Scrutin)
+  // âœ… Totaux fallback depuis scrutins_data (mÃªme source que la fiche Scrutin)
   const [scrutinsDataByNumero, setScrutinsDataByNumero] = useState<
     Record<string, any>
   >({});
 
-  // ✅ anchors (canonical)
+  // âœ… anchors (canonical)
   const [anchorY, setAnchorY] = useState<Record<string, number>>({});
   const setAnchor = (key: string) => (e: LayoutChangeEvent) => {
     const y = e?.nativeEvent?.layout?.y ?? 0;
@@ -632,13 +659,13 @@ export default function LoiDetailCanonScreen() {
     [anchorY]
   );
 
-  // ✅ navigation “preuve”
+  // âœ… navigation â€œpreuveâ€
   const openHref = useCallback(
     async (href: string) => {
       const h = String(href ?? "").trim();
       if (!h) return;
 
-      // ✅ EXTERNE: http(s), mailto, tel
+      // âœ… EXTERNE: http(s), mailto, tel
       if (/^(https?:\/\/|mailto:|tel:)/i.test(h)) {
         try {
           const ok = await Linking.canOpenURL(h);
@@ -653,38 +680,45 @@ export default function LoiDetailCanonScreen() {
         return;
       }
 
-      // ✅ INTERNE: routes app
+      // âœ… INTERNE: routes app
       if (h.startsWith("/")) {
         router.push(h as any);
         return;
       }
 
-      // ✅ fallback interne (ancien comportement) : on force un path
+      // âœ… fallback interne (ancien comportement) : on force un path
       router.push(("/" + h.replace(/^\/+/, "")) as any);
     },
     [router]
   );
 
   /**
-   * ✅ RESET propre sur changement d'ID (évite “flash”)
+   * âœ… RESET propre sur changement d'ID (Ã©vite â€œflashâ€)
    */
   useLayoutEffect(() => {
     setError(null);
     setLoiTitle(null);
     setTimelineRows([]);
     setLoading(!!id);
-    // ✅ reset DB-first
+
+    // âœ… reset DB-first
     setSources([]);
     setLoiTexte(null);
     setEnClair([]);
+
+    // âœ… reset votes
     setVotesByScrutin({});
     setTotauxByScrutin({});
+
+    // âœ… reset procÃ©dure canon
     setProcedureTimeline([]);
-    // ✅ reset fallback scrutins_data (sinon valeurs “fantômes” entre 2 lois)
+    setProcedureLoading(false);
+
+    // âœ… reset fallback scrutins_data (sinon valeurs â€œfantÃ´mesâ€ entre 2 lois)
     setScrutinsDataByNumero({});
   }, [id]);
 
-  // ✅ Load minimal: title + timeline
+  // âœ… Load minimal: title + timeline
   useEffect(() => {
     let alive = true;
 
@@ -710,7 +744,7 @@ export default function LoiDetailCanonScreen() {
           null;
 
         /**
-         * ✅ TIMELINE (ANTI-CASSE)
+         * âœ… TIMELINE (ANTI-CASSE)
          * 1) Tente CANON si canonKey "loi:..."
          * 2) Si vide -> fallback legacy (celle qui marchait) avec timelineQueryKey
          */
@@ -734,7 +768,7 @@ export default function LoiDetailCanonScreen() {
           }
         }
 
-        // ✅ fallback si canon vide OU pas de canonKey
+        // âœ… fallback si canon vide OU pas de canonKey
         if ((!Array.isArray(tl) || tl.length === 0) && timelineQueryKey) {
           tl = await fetchLoiTimeline(timelineQueryKey, 500);
           console.log(
@@ -745,13 +779,13 @@ export default function LoiDetailCanonScreen() {
           );
         }
 
-        // ✅ Fallback ultime: si on vient d'Actu avec un seedScrutin,
-        // objectif: récupérer aussi les scrutins solennels (vote final) via group_key,
-        // sans jamais casser l’écran.
+        // âœ… Fallback ultime: si on vient d'Actu avec un seedScrutin,
+        // objectif: rÃ©cupÃ©rer aussi les scrutins solennels (vote final) via group_key,
+        // sans jamais casser lâ€™Ã©cran.
         if ((!Array.isArray(tl) || tl.length === 0) && seedScrutin) {
           const seedNum = Number(seedScrutin);
           if (!Number.isNaN(seedNum)) {
-            // 1) récupérer le group_key via scrutins_data (source fiable)
+            // 1) rÃ©cupÃ©rer le group_key via scrutins_data (source fiable)
             const { data: sd, error: sdErr } = await supabase
               .from("scrutins_data")
               .select("group_key")
@@ -769,7 +803,7 @@ export default function LoiDetailCanonScreen() {
                 gkRaw,
               });
             } else {
-              // 2) construire les variantes ordinaire/solennel (sur la version réparée)
+              // 2) construire les variantes ordinaire/solennel (sur la version rÃ©parÃ©e)
               const gkOrd = gk.includes("scrutin-public-solennel-")
                 ? gk.replace(
                     "scrutin-public-solennel-",
@@ -784,7 +818,7 @@ export default function LoiDetailCanonScreen() {
                   )
                 : gk;
 
-              // 3) keys uniques (inclut aussi les versions réparées au cas où)
+              // 3) keys uniques (inclut aussi les versions rÃ©parÃ©es au cas oÃ¹)
               const keys = Array.from(
                 new Set(
                   [
@@ -820,7 +854,7 @@ export default function LoiDetailCanonScreen() {
 
               if (!rowsErr) {
                 tl = (rows ?? []).map((r: any) => ({
-                  loi_id: loiKey, // ✅ rattache au canon "loi:..." côté UI
+                  loi_id: loiKey, // âœ… rattache au canon "loi:..." cÃ´tÃ© UI
                   numero_scrutin: String(r.numero ?? ""),
                   date_scrutin: r.date_scrutin ?? null,
                   titre: r.titre ?? null,
@@ -837,7 +871,7 @@ export default function LoiDetailCanonScreen() {
 
         const rows = Array.isArray(tl) ? ((tl as any) as LoiTimelineRow[]) : [];
 
-        // ✅ Tri robuste : date DESC puis numero DESC
+        // âœ… Tri robuste : date DESC puis numero DESC
         rows.sort((a, b) => {
           const da = a?.date_scrutin ? Date.parse(String(a.date_scrutin)) : 0;
           const db = b?.date_scrutin ? Date.parse(String(b.date_scrutin)) : 0;
@@ -878,9 +912,9 @@ export default function LoiDetailCanonScreen() {
     return () => {
       alive = false;
     };
-  }, [id, loiKey, timelineQueryKey, titleFromId, canonKey]);
+  }, [id, loiKey, timelineQueryKey, titleFromId, canonKey, seedScrutin]);
 
-  // ✅ Load votes (V0) depuis les scrutins du parcours
+  // âœ… Load votes (V0) depuis les scrutins du parcours
   useEffect(() => {
     let alive = true;
 
@@ -902,7 +936,7 @@ export default function LoiDetailCanonScreen() {
           return;
         }
 
-        // ✅ V0 perf: on limite (les plus récents -> timelineRows déjà triée DESC)
+        // âœ… V0 perf: on limite (les plus rÃ©cents -> timelineRows dÃ©jÃ  triÃ©e DESC)
         const idsTop = ids;
 
         let rows: any[] = [];
@@ -916,7 +950,7 @@ export default function LoiDetailCanonScreen() {
           rows = [];
         }
 
-        // ✅ Totaux globaux : source fiable = scrutins_data (comme l'écran Scrutin)
+        // âœ… Totaux globaux : source fiable = scrutins_data (comme l'Ã©cran Scrutin)
         const numsTop = idsTop
           .map((s) => Number(String(s).replace(/\D+/g, "")))
           .filter((n) => Number.isFinite(n) && n > 0);
@@ -938,7 +972,7 @@ export default function LoiDetailCanonScreen() {
             if (!error) tdata = (data ?? []) as any[];
           } catch {}
 
-          // 2) fallback si les noms de colonnes sont différents
+          // 2) fallback si les noms de colonnes sont diffÃ©rents
           if (!tdata) {
             try {
               const { data, error } = await supabase
@@ -956,7 +990,7 @@ export default function LoiDetailCanonScreen() {
             const sid = String((t as any)?.numero ?? "").trim();
             if (!sid) continue;
 
-            // normalisation vers les clés attendues par ton UI (nb_pour / nb_contre / nb_abstention)
+            // normalisation vers les clÃ©s attendues par ton UI (nb_pour / nb_contre / nb_abstention)
             totMap[sid] = {
               nb_pour: (t as any)?.nb_pour ?? (t as any)?.pour ?? 0,
               nb_contre: (t as any)?.nb_contre ?? (t as any)?.contre ?? 0,
@@ -981,7 +1015,7 @@ export default function LoiDetailCanonScreen() {
           grouped[k].push(r);
         }
 
-        // tri interne: groupes “plus gros” d’abord (proxy: total)
+        // tri interne: groupes â€œplus grosâ€ dâ€™abord (proxy: total)
         Object.keys(grouped).forEach((k) => {
           grouped[k].sort((a, b) => {
             const ta = (a.pour ?? 0) + (a.contre ?? 0) + (a.abstention ?? 0);
@@ -992,10 +1026,10 @@ export default function LoiDetailCanonScreen() {
 
         setVotesByScrutin(grouped);
 
-        // ✅ 1) totauxByScrutin = source “globale” prioritaire
+        // âœ… 1) totauxByScrutin = source â€œglobaleâ€ prioritaire
         setTotauxByScrutin(totMap);
 
-        // ✅ 2) scrutinsDataByNumero = filet de sécurité utilisé dans le render si besoin
+        // âœ… 2) scrutinsDataByNumero = filet de sÃ©curitÃ© utilisÃ© dans le render si besoin
         setScrutinsDataByNumero(totMap);
       } catch (e) {
         if (!alive) return;
@@ -1011,7 +1045,7 @@ export default function LoiDetailCanonScreen() {
     };
   }, [timelineRows]);
 
-  // ✅ Load Procédure (dossier) — canon
+  // âœ… Load ProcÃ©dure (dossier) â€” canon
   useEffect(() => {
     let alive = true;
 
@@ -1023,31 +1057,36 @@ export default function LoiDetailCanonScreen() {
           return;
         }
 
+        setProcedureLoading(true);
+
         const steps = await fetchLoiProcedureCanon(
-  String(loiKey).trim(),
-  joParam ?? null,
-  200
-);
+          String(loiKey).trim(),
+          joParam ?? null,
+          200
+        );
 
-console.log(
-  "[PROC] steps",
-  Array.isArray(steps)
-    ? steps.map((s: any) => ({
-        idx: s?.step_index,
-        label: s?.label,
-        chambre: s?.chambre,
-        lecture: s?.lecture,
-        date: s?.date_start,
-      }))
-    : steps
-);
+        console.log(
+          "[PROC] steps",
+          Array.isArray(steps)
+            ? steps.map((s: any) => ({
+                idx: s?.step_index,
+                label: s?.label,
+                chambre: s?.chambre,
+                lecture: s?.lecture,
+                date: s?.date_start,
+              }))
+            : steps
+        );
 
-if (!alive) return;
-setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
+        if (!alive) return;
+        setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       } catch (e) {
         if (!alive) return;
         console.log("[LOI PROCEDURE CANON] error =", (e as any)?.message ?? e);
         setProcedureTimeline([]);
+      } finally {
+        if (!alive) return;
+        setProcedureLoading(false);
       }
     })();
 
@@ -1056,7 +1095,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
     };
   }, [loiKey, joParam]);
 
-  // ✅ Load DB-first: sources + texte (isolé, zéro impact timeline)
+  // âœ… Load DB-first: sources + texte (isolÃ©, zÃ©ro impact timeline)
   useEffect(() => {
     let alive = true;
 
@@ -1068,14 +1107,14 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
         return;
       }
 
-      // ✅ on essaie d’abord avec loiKey (canonKey si dispo), sinon id
+      // âœ… on essaie dâ€™abord avec loiKey (canonKey si dispo), sinon id
       const keyPrimary =
         String(loiKey ?? "").trim() ||
         (canonKey?.startsWith("loi:") ? canonKey.trim() : "") ||
         canonFromSlug(String(id ?? "")) ||
         String(id).trim();
 
-      // ✅ fallback explicite (anti-TS)
+      // âœ… fallback explicite (anti-TS)
       const keyFallback = String(id).trim();
 
       console.log("[LOI SOURCES] keys =", { id, loiKey, keyPrimary, keyFallback });
@@ -1118,7 +1157,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
     };
   }, [id, loiKey, canonKey]);
 
-  // ✅ IA “En clair” V1 (preuves obligatoires : sources)
+  // âœ… IA â€œEn clairâ€ V1 (preuves obligatoires : sources)
   useEffect(() => {
     let alive = true;
 
@@ -1133,7 +1172,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
         const items = await generateEnClairV1({
           loiId: String(id),
           texteIntegralClean: loiTexte?.texte_integral_clean ?? null,
-          exposeMotifsText: null, // ⚠️ on ne l’a pas encore en texte, donc null (safe)
+          exposeMotifsText: null, // âš ï¸ on ne lâ€™a pas encore en texte, donc null (safe)
           sources: sources ?? [],
         });
 
@@ -1152,7 +1191,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
   }, [id, loiTexte, sources]);
 
   /** =========================
-   *  ✅ A1 — Résumé V0 MANUEL (uniquement loi spéciale)
+   *  âœ… A1 â€” RÃ©sumÃ© V0 MANUEL (uniquement loi spÃ©ciale)
    *  ========================= */
   const resumeV0: ResumeV0 | null = useMemo(() => {
     if (!id) return null;
@@ -1161,34 +1200,38 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
     if (!match) return null;
 
     return {
-      title: "Résumé (V0 — rédigé à la main)",
+      title: "RÃ©sumÃ© (V0 â€” rÃ©digÃ© Ã  la main)",
       sentences: [
-        "Cette loi spéciale autorise l’État à continuer à fonctionner quand le budget annuel n’est pas encore voté.",
-        "Elle permet de maintenir les dépenses indispensables, comme le paiement des salaires publics et le fonctionnement des services de l’État.",
-        "Elle assure la continuité des services essentiels (impôts, sécurité sociale, hôpitaux, services publics).",
-        "Elle ne remplace pas le budget annuel et ne fixe pas les priorités budgétaires de l’année.",
+        "Cette loi spÃ©ciale autorise lâ€™Ã‰tat Ã  continuer Ã  fonctionner quand le budget annuel nâ€™est pas encore votÃ©.",
+        "Elle permet de maintenir les dÃ©penses indispensables, comme le paiement des salaires publics et le fonctionnement des services de lâ€™Ã‰tat.",
+        "Elle assure la continuitÃ© des services essentiels (impÃ´ts, sÃ©curitÃ© sociale, hÃ´pitaux, services publics).",
+        "Elle ne remplace pas le budget annuel et ne fixe pas les prioritÃ©s budgÃ©taires de lâ€™annÃ©e.",
       ],
       note:
-        "V0 manuel: ce texte est un prototype éditorial (pas encore généré automatiquement).",
+        "V0 manuel: ce texte est un prototype Ã©ditorial (pas encore gÃ©nÃ©rÃ© automatiquement).",
     };
   }, [id, canonKey]);
 
   /** =========================
-   *  ✅ TIMELINE UI (canon: groupTimelineByYear)
+   *  âœ… TIMELINE UI (canon: groupTimelineByYear)
    *  ========================= */
   const timelineSections = useMemo(() => {
     return groupTimelineByYear(timelineRows);
   }, [timelineRows]);
 
   /**
-   * ✅ Timeline “humaine” (sans refactor global)
-   * - regroupe par année : Vote final → Articles → Amendements
-   * - affiche un libellé court + une meta (kind/result/date)
+   * âœ… Timeline â€œhumaineâ€ (sans refactor global)
+   * - regroupe par annÃ©e : Vote final â†’ Articles â†’ Amendements
+   * - affiche un libellÃ© court + une meta (kind/result/date)
    */
   const timelineSectionsNice = useMemo(() => {
     const out: Record<
       string,
-      { final: LoiTimelineRow[]; articles: LoiTimelineRow[]; amendements: LoiTimelineRow[] }
+      {
+        final: LoiTimelineRow[];
+        articles: LoiTimelineRow[];
+        amendements: LoiTimelineRow[];
+      }
     > = {};
 
     (timelineSections ?? []).forEach((sec: any) => {
@@ -1203,7 +1246,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
         const titre = String((r as any)?.titre ?? "").toLowerCase();
         const objet = String((r as any)?.objet ?? "").toLowerCase();
 
-        // ✅ Vote final = "l'ensemble du projet/proposition de loi"
+        // âœ… Vote final = "l'ensemble du projet/proposition de loi"
         const looksFinal =
           !!(r as any)?.is_final ||
           titre.includes("l'ensemble du projet de loi") ||
@@ -1251,7 +1294,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
         r.date_scrutin ? fmtDateFR(r.date_scrutin) : null,
       ]
         .filter(Boolean)
-        .join(" · ");
+        .join(" Â· ");
 
       return (
         <View key={`${keyPrefix}-${sid || idx}`} style={styles.timelineRow}>
@@ -1282,20 +1325,20 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
   );
 
   /** =========================
-   *  ✅ VOTES UI helpers (V0)
+   *  âœ… VOTES UI helpers (V0)
    *  ========================= */
   const voteScrutinIds = useMemo(() => {
-    // ✅ source de vérité = timelineRows (sinon la liste disparaît si votesByScrutin est vide)
+    // âœ… source de vÃ©ritÃ© = timelineRows (sinon la liste disparaÃ®t si votesByScrutin est vide)
     const order = (timelineRows ?? [])
       .map((r) => String((r as any)?.numero_scrutin ?? "").trim())
       .filter(Boolean);
 
-    // ✅ unique + conserve l’ordre timeline
+    // âœ… unique + conserve lâ€™ordre timeline
     return Array.from(new Set(order));
   }, [timelineRows]);
 
   function countsFromAnyVoteRow(r: any) {
-    // 1) ✅ format pivot: pour/contre/abstention
+    // 1) âœ… format pivot: pour/contre/abstention
     const hasPivot =
       r && (r.pour != null || r.contre != null || r.abstention != null);
 
@@ -1304,14 +1347,14 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       const contre = Number(r.contre ?? 0);
       const abstention = Number(r.abstention ?? 0);
 
-      // si c'est déjà bon → on garde
+      // si c'est dÃ©jÃ  bon â†’ on garde
       if (pour + contre + abstention > 0) {
         return { pour, contre, abstention };
       }
       // sinon on continue: certains exports mettent 0 mais ont aussi des champs "nb_voix_*"
     }
 
-    // 2) ✅ variantes courantes: nb_pour/nb_contre/nb_abstention
+    // 2) âœ… variantes courantes: nb_pour/nb_contre/nb_abstention
     const np = Number((r as any)?.nb_pour ?? (r as any)?.voix_pour ?? 0);
     const nc = Number((r as any)?.nb_contre ?? (r as any)?.voix_contre ?? 0);
     const na = Number(
@@ -1322,7 +1365,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       return { pour: np, contre: nc, abstention: na };
     }
 
-    // 3) ✅ long format: une ligne = une position + nb_voix
+    // 3) âœ… long format: une ligne = une position + nb_voix
     const nb = Number(
       (r as any)?.nb_voix ?? (r as any)?.nb ?? (r as any)?.count ?? 0
     );
@@ -1373,13 +1416,13 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
   };
 
   /** =========================
-   *  ✅ MODEL (memo)
+   *  âœ… MODEL (memo)
    *  ========================= */
   const model: CanonModel = useMemo(() => {
     const editorialFromActu =
       fromKey === "actu" ? String(fromLabel ?? "").trim() : "";
 
-    // ✅ règle universelle: H1 = heroTitle (lock) sinon fromLabel (si Actu) sinon DB sinon canon
+    // âœ… rÃ¨gle universelle: H1 = heroTitle (lock) sinon fromLabel (si Actu) sinon DB sinon canon
     const h1 =
       lockedHeroTitle?.trim() ||
       editorialFromActu ||
@@ -1389,10 +1432,10 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
 
     const fallbackHeader: CanonHeader = {
       title: h1,
-      status: "—",
-      lastStepLabel: "—",
-      lastStepDate: "—",
-      oneLiner: "—",
+      status: "â€”",
+      lastStepLabel: "â€”",
+      lastStepDate: "â€”",
+      oneLiner: "â€”",
     };
 
     if (!id) {
@@ -1401,11 +1444,11 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
         tldr: [],
         context: undefined,
         impact: undefined,
-        timeline: [{ label: "Parcours", date: "—", result: "—", proofs: [] }],
+        timeline: [{ label: "Parcours", date: "â€”", result: "â€”", proofs: [] }],
         votes: undefined,
         measures: undefined,
         jo_date_promulgation: joParam ? joParam : null,
-        sources: { updatedAt: "Mis à jour: —", sources: [] },
+        sources: { updatedAt: "Mis Ã  jour: â€”", sources: [] },
       };
     }
 
@@ -1423,16 +1466,16 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       header = fallbackHeader;
     }
 
-    // ✅ Règle simple & sûre : si JO connu -> loi promulguée (tu avais "—" : je ne change pas ton intention ici)
+    // âœ… RÃ¨gle simple & sÃ»re : si JO connu -> loi promulguÃ©e (tu avais "â€”" : je ne change pas ton intention ici)
     if (joParam) {
-      header = { ...header, status: "—" };
+      header = { ...header, status: "â€”" };
     }
 
-    // ✅ Timeline depuis DB
+    // âœ… Timeline depuis DB
     let timeline: CanonTimelineStepUI[] = (timelineRows ?? []).map((r) => {
       const sid = r.numero_scrutin ? String(r.numero_scrutin) : "";
       return {
-        label: (r.titre ?? "").trim() || "Étape",
+        label: (r.titre ?? "").trim() || "Ã‰tape",
         date: fmtDateFR(r.date_scrutin),
         result: (r.resultat ?? "").trim() || undefined,
         proofs: sid
@@ -1446,15 +1489,15 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       };
     });
 
-    // ✅ Fallback Parcours si DB vide : utiliser seedScrutin
+    // âœ… Fallback Parcours si DB vide : utiliser seedScrutin
     if (timeline.length === 0 && seedScrutin) {
       const sid = String(seedScrutin).trim();
       if (sid) {
         timeline = [
           {
-            label: "Vote (détecté via le récit Actu)",
-            date: "—",
-            result: "—",
+            label: "Vote (dÃ©tectÃ© via le rÃ©cit Actu)",
+            date: "â€”",
+            result: "â€”",
             proofs: [
               {
                 label: `Voir scrutin ${sid}`,
@@ -1466,7 +1509,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       }
     }
 
-    // ✅ TLDR v0 : d'abord DB, sinon fallback via seedScrutin
+    // âœ… TLDR v0 : d'abord DB, sinon fallback via seedScrutin
     let tldr: CanonTLDRBullet[] = buildTLDRv0({
       loiId: id,
       loiTitle: h1,
@@ -1478,7 +1521,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       if (sid) {
         tldr = [
           {
-            text: "Dernier vote détecté via le récit Actu (données détaillées en cours de branchement).",
+            text: "Dernier vote dÃ©tectÃ© via le rÃ©cit Actu (donnÃ©es dÃ©taillÃ©es en cours de branchement).",
             proof: {
               label: `Voir le scrutin ${sid}`,
               href: `/scrutins/${encodeURIComponent(sid)}`,
@@ -1495,13 +1538,15 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
       impact: undefined,
       timeline: timeline.length
         ? timeline
-        : [{ label: "Parcours", date: "—", result: "—", proofs: [] }],
+        : [{ label: "Parcours", date: "â€”", result: "â€”", proofs: [] }],
       votes: undefined,
       measures: undefined,
       jo_date_promulgation: joParam ? joParam : null,
       sources: {
-        updatedAt: "Mis à jour: —",
-        sources: [{ label: "Fiche loi (app)", href: `/lois/${encodeURIComponent(id)}` }],
+        updatedAt: "Mis Ã  jour: â€”",
+        sources: [
+          { label: "Fiche loi (app)", href: `/lois/${encodeURIComponent(id)}` },
+        ],
       },
     };
   }, [
@@ -1519,14 +1564,14 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
   const showTLDR = model.tldr.length > 0;
 
   const displaySources: LoiSourceItem[] = useMemo(() => {
-    // 1) DB -> déjà au format UI (kind/label/url)
+    // 1) DB -> dÃ©jÃ  au format UI (kind/label/url)
     if (sources && sources.length > 0) return sources;
 
     // 2) Fallback minimal officiel si la DB est vide
     return toLoiSourcesUI([
       {
         kind: "AN_LISTE",
-        label: "Assemblée nationale — projets de loi",
+        label: "AssemblÃ©e nationale â€” projets de loi",
         url: "https://www2.assemblee-nationale.fr/documents/liste?type=projets-loi",
         date: null,
       },
@@ -1542,7 +1587,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
   const showEnClairV1 = enClair.length > 0;
   const showEnClairAny = showEnClairV1 || showTLDR;
 
-  // ✅ auto-scroll anchor si demandé (après layout + chargement)
+  // âœ… auto-scroll anchor si demandÃ© (aprÃ¨s layout + chargement)
   const didAutoScroll2 = useRef(false);
   useEffect(() => {
     if (didAutoScroll2.current) return;
@@ -1568,7 +1613,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
             padding: 16,
           }}
         >
-          <Text style={styles.muted}>Chargement…</Text>
+          <Text style={styles.muted}>Chargementâ€¦</Text>
         </View>
       </SafeAreaView>
     );
@@ -1588,7 +1633,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
           <Text style={styles.muted}>{error}</Text>
           <View style={{ height: 12 }} />
           <Pressable onPress={goBackSmart} style={styles.contextBtn}>
-            <Text style={styles.contextBtnText}>← Retour</Text>
+            <Text style={styles.contextBtnText}>â† Retour</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -1598,14 +1643,14 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
-        {/* ✅ Barre haut */}
+        {/* âœ… Barre haut */}
         <View style={styles.contextBar}>
           <View style={{ flex: 1 }}>
             {fromKey ? (
               <>
                 <Text style={styles.contextKicker}>Tu viens de</Text>
                 <Text style={styles.contextTitle} numberOfLines={1}>
-                  {fromLabel || "un récit"}
+                  {fromLabel || "un rÃ©cit"}
                 </Text>
               </>
             ) : (
@@ -1619,7 +1664,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
           </View>
 
           <Pressable onPress={goBackSmart} style={styles.contextBtn}>
-            <Text style={styles.contextBtnText}>← Retour</Text>
+            <Text style={styles.contextBtnText}>â† Retour</Text>
           </Pressable>
         </View>
 
@@ -1631,20 +1676,24 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
 
           {model?.jo_date_promulgation ? (
             <View style={{ marginTop: 8 }}>
-              <LoiPromulgationBlock datePromulgation={model.jo_date_promulgation} />
+              <LoiPromulgationBlock
+                datePromulgation={model.jo_date_promulgation}
+              />
             </View>
           ) : null}
 
           <View style={styles.heroMetaRow}>
             <View style={styles.statusPill}>
-              <Text style={styles.statusText}>Statut : {model.header.status}</Text>
+              <Text style={styles.statusText}>
+                Statut : {model.header.status}
+              </Text>
             </View>
 
-            {/* ✅ Facts lisibles : Vote vs JO */}
+            {/* âœ… Facts lisibles : Vote vs JO */}
             <View style={styles.factsCol}>
               <Text style={styles.factLine}>
-                <Text style={styles.factK}>Vote final à l’Assemblée :</Text>{" "}
-                {model.header.lastStepDate !== "—" ? model.header.lastStepDate : "—"}
+                <Text style={styles.factK}>Vote final Ã  lâ€™AssemblÃ©e :</Text>{" "}
+                {model.header.lastStepDate !== "â€”" ? model.header.lastStepDate : "â€”"}
               </Text>
 
               {model?.jo_date_promulgation ? (
@@ -1666,7 +1715,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                 onPress={() => scrollToAnchor("resume")}
                 style={styles.anchorBtn}
               >
-                <Text style={styles.anchorText}>Résumé</Text>
+                <Text style={styles.anchorText}>RÃ©sumÃ©</Text>
               </Pressable>
             )}
 
@@ -1679,14 +1728,14 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
               </Pressable>
             )}
 
-{procedureTimeline?.length ? (
-   <Pressable
-     onPress={() => scrollToAnchor("procedure")}
-     style={styles.anchorBtn}
-   >
-    <Text style={styles.anchorText}>Procédure</Text>
-   </Pressable>
- ) : null}
+            {(procedureLoading || procedureTimeline.length > 0) ? (
+              <Pressable
+                onPress={() => scrollToAnchor("procedure")}
+                style={styles.anchorBtn}
+              >
+                <Text style={styles.anchorText}>ProcÃ©dure</Text>
+              </Pressable>
+            ) : null}
 
             <Pressable
               onPress={() => scrollToAnchor("timeline")}
@@ -1711,13 +1760,13 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
           </View>
         </View>
 
-        {/* ✅ A1) RÉSUMÉ V0 (MANUEL) */}
+        {/* âœ… A1) RÃ‰SUMÃ‰ V0 (MANUEL) */}
         {!!resumeV0 && (
           <View onLayout={setAnchor("resume")}>
             <View style={styles.card}>
               <SectionTitle
-                title={resumeV0.title ?? "Résumé (V0)"}
-                subtitle="Prototype éditorial — lisible en 20 secondes"
+                title={resumeV0.title ?? "RÃ©sumÃ© (V0)"}
+                subtitle="Prototype Ã©ditorial â€” lisible en 20 secondes"
                 right={
                   <View style={styles.v0Pill}>
                     <Text style={styles.v0PillText}>V0</Text>
@@ -1725,18 +1774,18 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                 }
               />
 
-              {/* ✅ Procédure (AN/Sénat) — source dossier */}
-              
               <View style={{ gap: 10 }}>
                 {resumeV0.sentences.map((s, idx) => (
                   <Text key={`v0-${idx}`} style={styles.bullet}>
-                    • {s}
+                    â€¢ {s}
                   </Text>
                 ))}
               </View>
 
               {!!resumeV0.note && (
-                <Text style={[styles.muted, { marginTop: 10 }]}>{resumeV0.note}</Text>
+                <Text style={[styles.muted, { marginTop: 10 }]}>
+                  {resumeV0.note}
+                </Text>
               )}
             </View>
           </View>
@@ -1747,13 +1796,13 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
           <View style={styles.card}>
             <SectionTitle
               title="En clair"
-              subtitle="IA assistante — chaque point est vérifiable"
+              subtitle="IA assistante â€” chaque point est vÃ©rifiable"
             />
             {showEnClairV1 ? (
               <View style={{ gap: 10 }}>
                 {enClair.map((item, idx) => (
                   <View key={`enclair-${idx}`} style={{ gap: 6 }}>
-                    <Text style={styles.bullet}>• {item.text}</Text>
+                    <Text style={styles.bullet}>â€¢ {item.text}</Text>
 
                     {(item as any)?.source_url ? (
                       <ProofLink
@@ -1769,14 +1818,14 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
               </View>
             ) : !showTLDR ? (
               <Text style={styles.muted}>
-                Pas assez de preuves pour générer un TL;DR fiable (pas encore
-                branché).
+                Pas assez de preuves pour gÃ©nÃ©rer un TL;DR fiable (pas encore
+                branchÃ©).
               </Text>
             ) : (
               <View style={{ gap: 10 }}>
                 {model.tldr.slice(0, 6).map((b, idx) => (
                   <View key={`tldr-${idx}`} style={{ gap: 6 }}>
-                    <Text style={styles.bullet}>• {b.text}</Text>
+                    <Text style={styles.bullet}>â€¢ {b.text}</Text>
                     <ProofLink p={b.proof} onPress={openHref} />
                   </View>
                 ))}
@@ -1785,16 +1834,16 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
           </View>
         </View>
 
-{/* 3) Procédure (AN/Sénat) — dossier */}
+        {/* 3) ProcÃ©dure (AN/SÃ©nat) â€” dossier */}
         {procedureTimeline?.length ? (
           <View onLayout={setAnchor("procedure")}>
-           <View style={styles.card}>
-             <SectionTitle
-                title="Procédure"
-                subtitle="Étapes officielles (dossier AN/Sénat)"
+            <View style={styles.card}>
+              <SectionTitle
+                title="ProcÃ©dure"
+                subtitle="Ã‰tapes officielles (dossier AN/SÃ©nat)"
                 right={
                   <Text style={styles.muted}>
-                    {procedureTimeline.length} étape(s)
+                    {procedureTimeline.length} Ã©tape(s)
                   </Text>
                 }
               />
@@ -1807,16 +1856,11 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                     s.date_start ? fmtDateFR(s.date_start) : null,
                   ]
                     .filter(Boolean)
-                    .join(" · ");
+                    .join(" Â· ");
 
                   return (
-                    <View
-                      key={`proc-${s.step_index}-${i}`}
-                      style={styles.procRow}
-                    >
-                      <Text style={styles.procLabel}>
-                        {s.label || "Étape"}
-                      </Text>
+                    <View key={`proc-${s.step_index}-${i}`} style={styles.procRow}>
+                      <Text style={styles.procLabel}>{s.label || "Ã‰tape"}</Text>
                       {!!meta && <Text style={styles.procMeta}>{meta}</Text>}
 
                       {typeof s.source_url === "string" &&
@@ -1837,20 +1881,20 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
 
                 {procedureTimeline.length > 12 ? (
                   <Text style={styles.muted}>
-                    +{procedureTimeline.length - 12} étapes
+                    +{procedureTimeline.length - 12} Ã©tapes
                   </Text>
                 ) : null}
               </View>
             </View>
           </View>
-       ) : null}
+        ) : null}
 
         {/* 4) Timeline */}
         <View onLayout={setAnchor("timeline")}>
           <View style={styles.card}>
             <SectionTitle
-              title="Parcours législatif"
-              subtitle="Lecture simple — classée par année"
+              title="Parcours lÃ©gislatif"
+              subtitle="Lecture simple â€” classÃ©e par annÃ©e"
               right={
                 timelineRows.length > 12 ? (
                   <Text style={styles.muted}>+{timelineRows.length - 12}</Text>
@@ -1872,7 +1916,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                     <View style={{ flex: 1, gap: 4 }}>
                       <Text style={styles.timelineLabel}>{s.label}</Text>
                       <Text style={styles.muted}>
-                        {(s.date ?? "—") + (s.result ? ` • ${s.result}` : "")}
+                        {(s.date ?? "â€”") + (s.result ? ` â€¢ ${s.result}` : "")}
                       </Text>
 
                       {(s.proofs?.length ?? 0) > 0 ? (
@@ -1940,17 +1984,20 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
           <View style={styles.card}>
             <SectionTitle
               title="Votes"
-              subtitle="Résultats par scrutin — puis détail par groupes"
+              subtitle="RÃ©sultats par scrutin â€” puis dÃ©tail par groupes"
               right={
                 voteScrutinIds.length ? (
-                  <Text style={styles.muted}>{voteScrutinIds.length} scrutin(s)</Text>
+                  <Text style={styles.muted}>
+                    {voteScrutinIds.length} scrutin(s)
+                  </Text>
                 ) : null
               }
             />
 
             {voteScrutinIds.length === 0 ? (
               <Text style={styles.muted}>
-                Pas de votes disponibles (pas de scrutin détecté ou table non branchée).
+                Pas de votes disponibles (pas de scrutin dÃ©tectÃ© ou table non
+                branchÃ©e).
               </Text>
             ) : (
               <View style={{ gap: 10 }}>
@@ -1958,10 +2005,11 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                   const rows = (votesByScrutin as any)?.[sid] ?? [];
                   const tot = (totauxByScrutin as any)?.[sid] ?? null;
 
-                  // ✅ fallback ultime = scrutins_data (source fiable, déjà validée par la fiche Scrutin)
+                  // âœ… fallback ultime = scrutins_data (source fiable, dÃ©jÃ  validÃ©e par la fiche Scrutin)
                   let g =
                     tot &&
-                    ((tot as any).nb_pour ?? 0) + ((tot as any).nb_contre ?? 0) > 0
+                    ((tot as any).nb_pour ?? 0) + ((tot as any).nb_contre ?? 0) >
+                      0
                       ? {
                           pour: Number((tot as any).nb_pour ?? 0),
                           contre: Number((tot as any).nb_contre ?? 0),
@@ -1969,7 +2017,7 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                         }
                       : globalFromGroups(rows);
 
-                  // ✅ dernier filet de sécurité : si encore 0, lire scrutins_data déjà chargée ailleurs
+                  // âœ… dernier filet de sÃ©curitÃ© : si encore 0, lire scrutins_data dÃ©jÃ  chargÃ©e ailleurs
                   if (g.pour + g.contre + g.abstention === 0) {
                     const sd = (scrutinsDataByNumero as any)?.[sid];
                     if (sd) {
@@ -1993,22 +2041,26 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                     <Fold
                       key={`vote-${sid}`}
                       title={`Scrutin ${sid}`}
-                      subtitle={`Global: ${g.pour} pour • ${g.contre} contre • ${g.abstention} abst. (${totalExprimes} exprimés)`}
+                      subtitle={`Global: ${g.pour} pour â€¢ ${g.contre} contre â€¢ ${g.abstention} abst. (${totalExprimes} exprimÃ©s)`}
                       defaultOpen={idx === 0}
                     >
                       <View style={{ gap: 6, marginBottom: 8 }}>
                         <Text style={styles.muted}>
-                          Pour: {g.pour} ({fmtPct(g.pour, totalExprimes)}) • Contre:{" "}
-                          {g.contre} ({fmtPct(g.contre, totalExprimes)}) • Abst.:{" "}
+                          Pour: {g.pour} ({fmtPct(g.pour, totalExprimes)}) â€¢ Contre:{" "}
+                          {g.contre} ({fmtPct(g.contre, totalExprimes)}) â€¢ Abst.:{" "}
                           {g.abstention} ({fmtPct(g.abstention, totalExprimes)})
                         </Text>
 
                         <Pressable
-                          onPress={() => openHref(`/scrutins/${encodeURIComponent(sid)}`)}
+                          onPress={() =>
+                            openHref(`/scrutins/${encodeURIComponent(sid)}`)
+                          }
                           style={styles.sourceRow}
                         >
-                          <Text style={styles.sourceLabel}>Voir le détail du scrutin →</Text>
-                          <Text style={styles.chev}>→</Text>
+                          <Text style={styles.sourceLabel}>
+                            Voir le dÃ©tail du scrutin â†’
+                          </Text>
+                          <Text style={styles.chev}>â†’</Text>
                         </Pressable>
                       </View>
 
@@ -2019,19 +2071,24 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                           const t = c.pour + c.contre + c.abstention;
 
                           const pos = String(
-                            (r as any)?.position_majoritaire ?? (r as any)?.position ?? ""
+                            (r as any)?.position_majoritaire ??
+                              (r as any)?.position ??
+                              ""
                           )
                             .trim()
                             .toUpperCase();
 
                           return (
-                            <View key={`g-${sid}-${label}-${j}`} style={styles.voteGroupRow}>
+                            <View
+                              key={`g-${sid}-${label}-${j}`}
+                              style={styles.voteGroupRow}
+                            >
                               <Text style={styles.voteGroupTitle}>
                                 {label}
-                                {pos ? ` — ${pos}` : ""}
+                                {pos ? ` â€” ${pos}` : ""}
                               </Text>
                               <Text style={styles.muted}>
-                                {c.pour} pour • {c.contre} contre • {c.abstention} abst.
+                                {c.pour} pour â€¢ {c.contre} contre â€¢ {c.abstention} abst.
                                 (total {t})
                               </Text>
                             </View>
@@ -2065,13 +2122,13 @@ setProcedureTimeline((steps ?? []) as ProcedureTimelineStep[]);
                   style={styles.sourceRow}
                 >
                   <Text style={styles.sourceLabel}>{s.label}</Text>
-                  <Text style={styles.chev}>→</Text>
+                  <Text style={styles.chev}>â†’</Text>
                 </Pressable>
               ))}
             </View>
 
             <Text style={[styles.muted, { marginTop: 10 }]}>
-              Règle: la page se termine toujours par la traçabilité.
+              RÃ¨gle: la page se termine toujours par la traÃ§abilitÃ©.
             </Text>
           </View>
         </View>
@@ -2187,7 +2244,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  // ✅ A1 pill V0
+  // âœ… A1 pill V0
   v0Pill: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -2256,7 +2313,7 @@ const styles = StyleSheet.create({
   },
   timelineLabel: { color: INK, fontSize: 13, fontWeight: "900" },
 
-  // ✅ NEW: sous-ligne meta (kind/result/date)
+  // âœ… NEW: sous-ligne meta (kind/result/date)
   timelineMeta: {
     color: INK_SOFT,
     fontSize: 12,
@@ -2265,7 +2322,7 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
 
-  // ✅ NEW: sous-titres de section (Vote final / Articles / Amendements)
+  // âœ… NEW: sous-titres de section (Vote final / Articles / Amendements)
   timelineSubhead: {
     color: INK,
     fontSize: 12,
@@ -2297,7 +2354,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
 
-  // ✅ Votes rows
+  // âœ… Votes rows
   voteGroupRow: {
     paddingVertical: 10,
     paddingHorizontal: 10,
@@ -2366,20 +2423,23 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     opacity: 0.9,
   },
-procLeft: { width: 16, alignItems: "center" },
-procDot: {
-  width: 8,
-  height: 8,
-  borderRadius: 999,
-  backgroundColor: "rgba(18,20,23,0.35)",
-  marginTop: 4,
-},
-procLine: {
-  width: 2,
-  flex: 1,
-  backgroundColor: BORDER,
-  marginTop: 6,
-  borderRadius: 999,
-},
 
+  procLeft: { width: 16, alignItems: "center" },
+  procDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(18,20,23,0.35)",
+    marginTop: 4,
+  },
+  procLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: BORDER,
+    marginTop: 6,
+    borderRadius: 999,
+  },
 });
+
+
+

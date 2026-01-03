@@ -16,7 +16,7 @@ import {
   InteractionManager,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
+import { useLocalSearchParams, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { fetchActuItems, type ActuItem as ActuItemDB } from "@/lib/queries/actu";
@@ -24,6 +24,9 @@ import { groupActuItems, type GroupedActuRow } from "@/lib/actu/grouping";
 
 import ActuBulletinRow from "@/components/actu/ActuBulletinRow";
 import type { ActuItemUI, Tone } from "@/components/actu/types";
+
+import { useRouter } from "expo-router";
+
 
 const PAPER = "#F6F1E8";
 const PAPER_CARD = "#FBF7F0";
@@ -674,10 +677,11 @@ type ActuParams = {
   restoreTs?: string;
 };
 
+
 export default function ActuIndexScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<ActuParams>();
-
+  
   const listRef = useRef<FlatList<Row> | null>(null);
   const scrollOffsetRef = useRef(0);
   const [q, setQ] = useState("");
@@ -1283,22 +1287,44 @@ const heroTitleLocked = isLoiSpeciale
   ? "Permettre à l’État de fonctionner"
   : heroTitle;
 
+  // ✅ L’item cliqué (NE PAS utiliser "rows" ici)
+const row = ui as any;
 
-        router.push({
-          pathname: "/lois/[id]",
-          params: {
-            id: dbLoiId,
-            canonKey,
-            fromKey: "actu",
-            fromLabel: heroTitleLocked || undefined,
-            heroTitle: heroTitleLocked || undefined,
-            joParam: (ui as any)?.jo_date_promulgation ?? undefined,
-            restoreId,
-            restoreOffset,
-            seedScrutin: seedScrutin || undefined,
+const loiIdCanon = String(row?.loi_id_canon ?? row?.canonKey ?? "").trim();
+const loiIdScrutin = String(row?.loi_id_scrutin ?? row?.dossier_id ?? "").trim();
+const seedScrutinLocal = String(row?.numero_scrutin ?? "").trim();
 
- // ✅ JO (provenance externe)
-    jo: (ui as any)?.jo_date_promulgation ?? undefined,
+// ❌ Exclure les items non-loi (ex: motions / déclarations / etc)
+if (String(row?.kind ?? "").trim() === "article") {
+  console.log("[ACTU][SKIP] not a law item", {
+    kind: row?.kind,
+    title: row?.title,
+  });
+  return;
+}
+
+console.log("[ACTU][OPEN][TIMELINE PARAM]", {
+  canonKey: loiIdCanon,
+  seedScrutin: seedScrutinLocal,
+  loi_id_scrutin: loiIdScrutin,
+  timelineQueryKey: loiIdScrutin || seedScrutinLocal || null,
+});
+
+router.push({
+  pathname: `/(tabs)/lois/${encodeURIComponent(loiIdCanon)}`,
+  params: {
+  canonKey: loiIdCanon,
+  timelineQueryKey: loiIdScrutin || seedScrutinLocal || "",
+  seedScrutin: seedScrutinLocal,
+  heroTitle: String(row?.title ?? ""),
+  fromKey: "actu",
+    fromLabel: String(row?.title ?? ""),
+    restoreId: String(row?.id ?? ""),
+    restoreOffset: "0",
+
+    // ✅ tu as 2 systèmes : joParam (ton modèle) + jo (ancien fallback)
+    joParam: String(row?.jo_date_promulgation ?? ""),
+    jo: row?.jo_date_promulgation ?? undefined,
   },
 });
         return;
@@ -1351,89 +1377,100 @@ const heroTitleLocked = isLoiSpeciale
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <View style={styles.hTitleRow}>
-          <Text style={styles.h1}>Bulletin parlementaire</Text>
+  <View style={styles.hTitleRow}>
+    <Text style={styles.h1}>Bulletin parlementaire</Text>
 
-          {DEBUG_ACTU ? (
-            <View style={styles.debugPill}>
-              <Ionicons name="bug-outline" size={14} color={INK} />
-              <Text style={styles.debugPillText}>DEBUG</Text>
-            </View>
-          ) : (
-            <View style={styles.hBadge}>
-              <Ionicons name="checkmark-circle-outline" size={14} color={INK} />
-              <Text style={styles.hBadgeText}>Vérifiable</Text>
-            </View>
-          )}
-        </View>
+    <View style={styles.headerRight}>
+      <Pressable
+        onPress={() => router.push("/explorer")}
+        style={styles.explorerBtn}
+      >
+        <Ionicons name="compass-outline" size={16} color="#121417" />
+        <Text style={styles.explorerText}>Explorer</Text>
+      </Pressable>
 
-        <Text style={styles.h2}>Décisions, votes et étapes — avec preuves.</Text>
-
-        <TextInput
-          value={q}
-          onChangeText={setQ}
-          placeholder="Rechercher…"
-          placeholderTextColor={INK_SOFT}
-          style={styles.search}
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-        />
-      </View>
-
-      {loading ? (
-        <View style={{ padding: 16, gap: 10 }}>
-          <ActivityIndicator />
-          <Text style={{ color: INK_SOFT }}>Chargement…</Text>
-        </View>
-      ) : error ? (
-        <View style={{ padding: 16, gap: 8 }}>
-          <Text style={{ color: INK, fontWeight: "900" }}>
-            Impossible de charger
-          </Text>
-          <Text style={{ color: INK_SOFT }}>{error}</Text>
-          <Pressable onPress={onRefresh} style={{ marginTop: 8 }}>
-            <Text style={{ color: INK, fontWeight: "900" }}>Réessayer →</Text>
-          </Pressable>
+      {DEBUG_ACTU ? (
+        <View style={styles.debugPill}>
+          <Ionicons name="bug-outline" size={14} color={INK} />
+          <Text style={styles.debugPillText}>DEBUG</Text>
         </View>
       ) : (
-        <FlatList
-          ref={(r) => {
-            listRef.current = r as any;
-          }}
-          data={rows}
-          keyExtractor={(r, idx) =>
-            r.kind === "header" ? `h-${r.title}-${idx}` : `i-${r.item.id}`
-          }
-          renderItem={renderRow}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
-          contentContainerStyle={[styles.listContent, { paddingBottom: 0 }]}
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
-          ListEmptyComponent={
-            <View style={{ padding: 16 }}>
-              <Text style={{ color: INK_SOFT }}>
-                Aucun élément ne correspond à ta recherche.
-              </Text>
-            </View>
-          }
-          onScroll={(e) => {
-            scrollOffsetRef.current = e?.nativeEvent?.contentOffset?.y ?? 0;
-          }}
-          scrollEventThrottle={16}
-          onScrollToIndexFailed={(info) => {
-            dlog("[ACTU][RESTORE] onScrollToIndexFailed", info);
-            const approx = Math.max(
-              0,
-              (info?.averageItemLength ?? 80) * (info?.index ?? 0)
-            );
-            listRef.current?.scrollToOffset({ offset: approx, animated: false });
-          }}
-        />
+        <View style={styles.hBadge}>
+          <Ionicons name="checkmark-circle-outline" size={14} color={INK} />
+          <Text style={styles.hBadgeText}>Vérifiable</Text>
+        </View>
       )}
-    </SafeAreaView>
-  );
+    </View>
+  </View>
+
+  <Text style={styles.h2}>Décisions, votes et étapes — avec preuves.</Text>
+
+  <TextInput
+    value={q}
+    onChangeText={setQ}
+    placeholder="Rechercher…"
+    placeholderTextColor={INK_SOFT}
+    style={styles.search}
+    autoCapitalize="none"
+    autoCorrect={false}
+    clearButtonMode="while-editing"
+  />
+</View>
+
+      {loading ? (
+  <View style={{ padding: 16, gap: 10 }}>
+    <ActivityIndicator />
+    <Text style={{ color: INK_SOFT }}>Chargement…</Text>
+  </View>
+) : error ? (
+  <View style={{ padding: 16, gap: 8 }}>
+    <Text style={{ color: INK, fontWeight: "900" }}>
+      Impossible de charger
+    </Text>
+    <Text style={{ color: INK_SOFT }}>{error}</Text>
+    <Pressable onPress={onRefresh} style={{ marginTop: 8 }}>
+      <Text style={{ color: INK, fontWeight: "900" }}>Réessayer →</Text>
+    </Pressable>
+  </View>
+) : (
+  <FlatList
+    ref={(r) => {
+      listRef.current = r as any;
+    }}
+    data={rows}
+    keyExtractor={(r, idx) =>
+      r.kind === "header" ? `h-${r.title}-${idx}` : `i-${r.item.id}`
+    }
+    renderItem={renderRow}
+    refreshControl={
+      <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+    }
+    contentContainerStyle={[styles.listContent, { paddingBottom: 0 }]}
+    ItemSeparatorComponent={() => <View style={styles.sep} />}
+    ListEmptyComponent={
+      <View style={{ padding: 16 }}>
+        <Text style={{ color: INK_SOFT }}>
+          Aucun élément ne correspond à ta recherche.
+        </Text>
+      </View>
+    }
+    onScroll={(e) => {
+      scrollOffsetRef.current = e?.nativeEvent?.contentOffset?.y ?? 0;
+    }}
+    scrollEventThrottle={16}
+    onScrollToIndexFailed={(info) => {
+      dlog("[ACTU][RESTORE] onScrollToIndexFailed", info);
+      const approx = Math.max(
+        0,
+        (info?.averageItemLength ?? 80) * (info?.index ?? 0)
+      );
+      listRef.current?.scrollToOffset({ offset: approx, animated: false });
+    }}
+  />
+)}
+
+</SafeAreaView>
+);
 }
 
 const styles = StyleSheet.create({
@@ -1509,4 +1546,55 @@ const styles = StyleSheet.create({
   },
 
   sep: { height: 6 },
+
+  header: {
+  flexDirection: "row",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  paddingHorizontal: 16,
+  paddingTop: 14,
+},
+
+headerLeft: {
+  flex: 1,
+  gap: 4,
+},
+
+headerRight: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 8,
+},
+
+explorerBtn: {
+  flexDirection: "row",
+  alignItems: "center",
+  gap: 6,
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 999,
+  borderWidth: 1,
+  borderColor: "rgba(18,20,23,0.15)",
+  backgroundColor: "rgba(18,20,23,0.04)",
+},
+
+explorerText: {
+  fontSize: 11,
+  fontWeight: "800",
+  color: "#121417",
+},
+
+debugBtn: {
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 999,
+  borderWidth: 1,
+  borderColor: "rgba(18,20,23,0.15)",
+},
+
+debugText: {
+  fontSize: 11,
+  fontWeight: "800",
+  color: "#121417",
+},
 });

@@ -1,6 +1,6 @@
 // components/actu/ActuBulletinRow.tsx
 import React, { useMemo, useState, useCallback } from "react";
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
@@ -17,9 +17,7 @@ type StatusKey = "adopted" | "rejected" | "pending";
 
 type BulletinItem = ActuItemUI & {
   why?: string;
-  thumb?: any;
   dateISO?: string;
-  theme?: string;
   statusKey?: StatusKey;
 
   // (optionnel) champs utiles au routing / debug
@@ -44,154 +42,6 @@ function norm(s?: string | null) {
     .replace(/[’]/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/* ─────────────────────────────
-   ✅ inferTheme PROD (final)
-   ───────────────────────────── */
-function inferTheme(item?: Partial<BulletinItem>): string | undefined {
-  const explicitRaw = (item as any)?.theme;
-  const explicit = norm(explicitRaw);
-  if (explicit) return explicit;
-
-  const title = norm((item as any)?.title);
-  const subtitle = norm((item as any)?.subtitle);
-  const stats = norm((item as any)?.statsLine);
-  const tag = norm((item as any)?.tag);
-
-  const hay = norm(`${title} ${subtitle} ${stats} ${tag}`);
-  if (!hay) return undefined;
-
-  const has = (re: RegExp) => re.test(hay);
-  const isSecuSociale = has(/\bsecurite sociale\b/);
-
-  if (
-    has(/\b(olymp|paralymp|jo)\b/) ||
-    has(/\bsport\b/) ||
-    has(/\bstade\b|\bfederation\b/)
-  )
-    return "sport";
-
-  if (
-    has(
-      /\b(budget|financ|plf|impot|taxe|deficit|dette|recette|depense|fiscal|tresor|comptes?)\b/
-    ) ||
-    (isSecuSociale && has(/\b(budget|financ|comptes?|recette|depense|plf)\b/))
-  )
-    return "budget";
-
-  if (
-    has(
-      /\b(sante|hopital|soin|medec|pharma|maladie|patients?|handicap|psy|vaccin|soignants?)\b/
-    ) ||
-    (isSecuSociale && has(/\b(maladie|soin|hopital|assurance)\b/))
-  )
-    return "sante";
-
-  if (
-    has(
-      /\b(justice|penal|tribunal|juge|procureur|condamn|prison|detention|droit|peine|delit|crime|code)\b/
-    )
-  )
-    return "justice";
-
-  if (
-    has(
-      /\b(ecolog|climat|carbone|co2|energie|eolien|solaire|nucleaire|transition|pollution|biodiversite|agriculture|eau)\b/
-    ) ||
-    has(/\b(transports?|mobilite|ferroviaire|sncf|aerien|autoroute|znf|zfe)\b/)
-  )
-    return "ecologie";
-
-  if (
-    has(
-      /\b(europe|ue|union europeenne|parlement europeen|conseil europeen|directive|reglement|schengen|international)\b/
-    )
-  )
-    return "europe";
-
-  if (
-    !isSecuSociale &&
-    has(
-      /\b(securite|defense|armee|militaire|police|gendarmerie|terrorisme|renseignement|cyber|frontiere)\b/
-    )
-  )
-    return "securite";
-
-  if (
-    has(
-      /\b(travail|emploi|salaire|smic|retrait|chomage|formation|entreprise|syndicat|convention)\b/
-    )
-  )
-    return "travail";
-
-  if (
-    has(
-      /\b(logement|immobilier|loyer|urbanisme|construction|renovation|habitat|foncier)\b/
-    )
-  )
-    return "logement";
-
-  if (
-    has(
-      /\b(education|ecole|college|lycee|universite|etudiant|enseignement|jeunesse|apprentissage)\b/
-    )
-  )
-    return "education";
-
-  return undefined;
-}
-
-/* ─────────────────────────────
-   Palette de thèmes (accent + wash)
-   ───────────────────────────── */
-function themePalette(theme?: string) {
-  const t = norm(theme);
-
-  if (t.includes("budget") || t.includes("finance") || t.includes("impot"))
-    return { accent: "#2563EB", wash: "rgba(37,99,235,0.24)" };
-
-  if (t.includes("sante") || t.includes("hopital") || t.includes("soin"))
-    return { accent: "#0EA5E9", wash: "rgba(14,165,233,0.24)" };
-
-  if (t.includes("justice") || t.includes("droit"))
-    return { accent: "#7C3AED", wash: "rgba(124,58,237,0.24)" };
-
-  if (t.includes("sport") || t.includes("jo") || t.includes("olymp"))
-    return { accent: "#EA580C", wash: "rgba(234,88,12,0.25)" };
-
-  if (t.includes("ecologie") || t.includes("climat") || t.includes("energie"))
-    return { accent: "#16A34A", wash: "rgba(22,163,74,0.24)" };
-
-  if (t.includes("europe") || t.includes("ue"))
-    return { accent: "#1D4ED8", wash: "rgba(29,78,216,0.24)" };
-
-  if (t.includes("securite") || t.includes("defense") || t.includes("police"))
-    return { accent: "#DC2626", wash: "rgba(220,38,38,0.24)" };
-
-  if (t.includes("travail") || t.includes("emploi") || t.includes("retrait"))
-    return { accent: "#0F766E", wash: "rgba(15,118,110,0.24)" };
-
-  if (t.includes("logement") || t.includes("immobilier"))
-    return { accent: "#B45309", wash: "rgba(180,83,9,0.24)" };
-
-  if (t.includes("education") || t.includes("ecole") || t.includes("universite"))
-    return { accent: "#0D9488", wash: "rgba(13,148,136,0.24)" };
-
-  return { accent: "#64748B", wash: "rgba(100,116,139,0.18)" };
-}
-
-function themeThumb(_theme?: string): any | null {
-  return null;
-}
-
-function typeAccentFromTag(tag?: string) {
-  const s = norm(tag);
-  if (s.includes("vote")) return "#2563EB";
-  if (s.includes("loi")) return "#16A34A";
-  if (s.includes("amend")) return "#7C3AED";
-  if (s.includes("declar")) return "#EA580C";
-  return "#64748B";
 }
 
 function pad2(n: number) {
@@ -309,16 +159,10 @@ export default function ActuBulletinRow({
   const hour = useMemo(() => formatHour(item?.dateISO), [item?.dateISO]);
   const dayMonth = useMemo(() => formatDayMonth(item?.dateISO), [item?.dateISO]);
 
-  const effectiveTheme = useMemo(() => inferTheme(item), [item]);
-  const pal = useMemo(() => themePalette(effectiveTheme), [effectiveTheme]);
-  const typeAccent = useMemo(() => typeAccentFromTag(item?.tag), [item?.tag]);
-
-  const thumb = useMemo(
-    () => item?.thumb ?? themeThumb(effectiveTheme),
-    [item?.thumb, effectiveTheme]
-  );
-
-  const signal = pal?.accent ?? typeAccent;
+  // ✅ ACTU NEUTRE : aucune couleur par thème (ni type).
+  // La seule couleur restante doit être dans les badges de statut.
+  const signal = "rgba(18,20,23,0.28)";
+  const wash = "transparent";
 
   // ✅ B2.2: override statut si JO/promptulgation présent
   const isPromulguee = !!(item as any)?.jo_date_promulgation;
@@ -391,7 +235,7 @@ export default function ActuBulletinRow({
 
       <View style={styles.row}>
         <View pointerEvents="none" style={styles.paperWashLayer}>
-          <View style={[styles.washBand, { backgroundColor: pal.wash }]} />
+          <View style={[styles.washBand, { backgroundColor: wash }]} />
           <View style={styles.paperHighlight} />
         </View>
 
@@ -399,12 +243,6 @@ export default function ActuBulletinRow({
           pointerEvents="none"
           style={[styles.accentEdge, { backgroundColor: signal }]}
         />
-
-        {!!thumb && (
-          <View style={styles.thumbWrap}>
-            <Image source={thumb} style={styles.thumb} />
-          </View>
-        )}
 
         <View style={styles.content}>
           <View style={styles.metaRow}>
@@ -573,17 +411,6 @@ const styles = StyleSheet.create({
     width: 3,
     opacity: 0.35,
   },
-
-  thumbWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(18,20,23,0.10)",
-    backgroundColor: "rgba(18,20,23,0.02)",
-  },
-  thumb: { width: "100%", height: "100%", resizeMode: "cover" },
 
   content: { flex: 1, minWidth: 0 },
 

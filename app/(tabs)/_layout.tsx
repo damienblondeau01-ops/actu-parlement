@@ -3,7 +3,10 @@ import React from "react";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { View, StyleSheet } from "react-native";
-import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 
 const OPAQUE_BG = "#F6F1E8";
 const INK = "#121417";
@@ -21,7 +24,6 @@ function TabsInner() {
   const bottomOffset = Math.max(insets.bottom ?? 0, 8);
 
   // ✅ MASQUE OPAQUE : couvre toute la zone "sous la tabbar"
-  // (offset bas + hauteur tabbar + petit rab pour les arrondis/ombres)
   const bottomMaskH = bottomOffset + TABBAR_H + 16;
 
   return (
@@ -77,13 +79,16 @@ function TabsInner() {
           tabBarHideOnKeyboard: true,
         }}
       >
+      
+
+        {/* ✅ NOUVEL ONGLET : Explorer */}
         <Tabs.Screen
-          name="actu/index"
+          name="explorer/index"
           options={{
-            title: "Actu",
+            title: "Explorer",
             tabBarIcon: ({ color, focused }) => (
               <Ionicons
-                name={focused ? "newspaper" : "newspaper-outline"}
+                name={focused ? "compass" : "compass-outline"}
                 size={22}
                 color={color}
               />
@@ -152,11 +157,9 @@ function TabsInner() {
         <Tabs.Screen name="index" options={{ href: null }} />
         <Tabs.Screen name="stats" options={{ href: null }} />
         <Tabs.Screen name="stats-groupes" options={{ href: null }} />
+      </Tabs>
 
-        {/* cache tabbar sur détails */}
-</Tabs>
-
-      {/* ✅ ICI le MASQUE : au-dessus des écrans (donc cache la liste dessous),
+      {/* ✅ MASQUE : au-dessus des écrans (cache la liste dessous),
           mais en dessous de la tabbar (zIndex 10 vs tabbar zIndex 20) */}
       <View
         pointerEvents="none"
@@ -192,4 +195,3 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
 });
-

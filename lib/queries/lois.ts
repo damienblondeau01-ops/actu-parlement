@@ -6,6 +6,8 @@ import {
   buildProcedureTimeline,
   type CanonTimelineStep,
 } from "@/lib/lois/procedureCanon";
+import { supabase } from "@/lib/supabaseClient";
+
 
 
 /**
@@ -273,6 +275,45 @@ const joStatus = (joErr ? null : (jo as any)) as LoiJOStatusRow | null;
   return null;
 }
 
+function pickDossierIdFromLoiDetail(loi: any): string | null {
+  return (
+    loi?.dossier_id ??
+    loi?.dossier_an_id ??
+    loi?.dossierId ??
+    loi?.dossierAnId ??
+    loi?.dossier ??
+    null
+  );
+}
+
+export async function fetchLoiProcedureStepsByDossierId(dossierId: string) {
+  const did = String(dossierId ?? "").trim();
+  if (!did) return [] as LoiProcedureStepRow[];
+
+  const { data, error } = await supabase
+    .from("loi_procedure_steps")
+    .select("dossier_id,step_index,step_kind,date_start,label,source_url,chamber,lecture")
+    .eq("dossier_id", did)
+    .order("step_index", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as LoiProcedureStepRow[];
+}
+
+/**
+ * ✅ Variante simple : loiId -> fetchLoiDetail -> dossierId -> steps
+ * Utile si tu ne veux pas gérer dossierId côté UI.
+ */
+export async function fetchLoiProcedureSteps(loiId: string) {
+  const loi = await fetchLoiDetail(loiId);
+  const dossierId = pickDossierIdFromLoiDetail(loi);
+  if (!dossierId) return { dossierId: null as string | null, steps: [] as LoiProcedureStepRow[] };
+
+  const steps = await fetchLoiProcedureStepsByDossierId(dossierId);
+  return { dossierId, steps };
+}
+
+
 /**
  * ==========================
  *  TIMELINE (scrutins liés)
@@ -326,6 +367,44 @@ export async function fetchLoiTimelineCanon(canonKey: string, limit = 500) {
     .order("numero_scrutin", { ascending: false })
     .limit(limit);
 
+      // 🔁 Fallback si la vue stocke loi_id = "scrutin-public-..." (cas actuel chez toi)
+  const altIds = await resolveScrutinIdsFromCanonKey(ck);
+  if (altIds.length > 0) {
+    const { data: dataAlt, error: errAlt } = await fromSafe(VIEW_SCRUTINS_PAR_LOI_APP as any)
+      .select(
+        `
+        loi_id,
+        numero_scrutin,
+        date_scrutin,
+        titre,
+        objet,
+        resultat,
+        kind,
+        article_ref,
+        legislature
+      `
+      )
+      .in("loi_id", altIds)
+      .order("date_scrutin", { ascending: false })
+      .order("numero_scrutin", { ascending: false })
+      .limit(limit);
+
+    console.log(
+      "[fetchLoiTimelineCanon][scrutins_par_loi_app|alt IN] ids =",
+      altIds.slice(0, 3),
+      "| got =",
+      (dataAlt ?? []).length,
+      "| error =",
+      errAlt?.message ?? null
+    );
+
+    if (!errAlt && (dataAlt ?? []).length > 0) {
+      // On “force” loi_id au canon pour uniformiser l’écran
+      return (dataAlt as any[]).map((r: any) => ({ ...r, loi_id: ck })) as LoiTimelineRow[];
+    }
+  }
+
+
   // ✅ si la vue n'existe pas / colonne manque -> on retourne [] (fallback écran)
   if (error) {
     const msg = String((error as any)?.message ?? "");
@@ -336,8 +415,22 @@ export async function fetchLoiTimelineCanon(canonKey: string, limit = 500) {
   return (data ?? []) as LoiTimelineRow[];
 }
 
+export type LoiProcedureStepRow = {
+  dossier_id: string;
+  step_index: number;
+  step_kind: string;        // ex: DOSSIER_AN, DEPOT, LECTURE, CMP, ADOPTION, PROMULGATION, JO
+  date_start: string | null; // ISO date (YYYY-MM-DD) ou null
+  label: string | null;
+  source_url: string | null;
+
+  // selon ta table, si tu as ces colonnes, laisse en optionnel
+  chamber?: string | null;  // "AN" | "SENAT" (si présent)
+  lecture?: string | null;  // "1" | "NL" | "LD" (si présent)
+};
+
+
 const TIMELINE_SELECT = `
-   loi_id,
+  loi_id,
   numero_scrutin,
   date_scrutin,
   titre,
@@ -345,12 +438,7 @@ const TIMELINE_SELECT = `
   resultat,
   kind,
   article_ref,
-  legislature,
-  kind_label,
-  result_short,
-  is_final,
-  article_num,
-  scrutin_label_short
+  legislature
 `;
 
 // ✅ select fallback unified SANS legislature (car tu as l’erreur “legislature does not exist”)
@@ -420,6 +508,31 @@ async function resolveDossierIdFromCanonKey(
   return null;
 }
 
+async function resolveScrutinIdsFromCanonKey(canonKey: string): Promise<string[]> {
+  const ck = String(canonKey ?? "").trim();
+  if (!ck || !ck.startsWith("loi:")) return [];
+
+  // On récupère les ids "scrutin-public-..." liés à ce canon
+  const { data, error } = await fromSafe(VIEW_SCRUTINS_LOI_ENRICHIS_UNIFIED as any)
+    .select("loi_id_scrutin, loi_id_canon, date_scrutin")
+    .eq("loi_id_canon", ck)
+    .order("date_scrutin", { ascending: false })
+    .limit(50);
+
+  if (error) {
+    console.log("[resolveScrutinIdsFromCanonKey] error =", error?.message ?? error);
+    return [];
+  }
+
+  const ids = (data ?? [])
+    .map((r: any) => String(r?.loi_id_scrutin ?? "").trim())
+    .filter(Boolean);
+
+  // dédoublonnage en gardant l’ordre
+  return Array.from(new Set(ids));
+}
+
+
 // ta view listée existe : public.scrutins_data
 const VIEW_SCRUTINS_DATA = "scrutins_data";
 
@@ -438,6 +551,8 @@ export async function fetchLoiTimeline(loiId: string, limit = 500) {
 
   // 0) ✅ Source canon: scrutins_par_loi_app (si on a un canonKey "loi:...")
   if (id.startsWith("loi:")) {
+    console.log("[DEBUG TIMELINE_SELECT]", TIMELINE_SELECT);
+  console.log("[DEBUG VIEW]", DB_VIEWS.SCRUTINS_PAR_LOI_APP);
     const { data, error } = await fromSafe(DB_VIEWS.SCRUTINS_PAR_LOI_APP as any)
       .select(TIMELINE_SELECT)
       .eq("loi_id", id)

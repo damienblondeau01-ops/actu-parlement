@@ -2,51 +2,77 @@
 import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
 
 export type LoiProcedureStep = {
-  loi_id: string;
+  loi_id: string | null;
   dossier_id: string | null;
 
-  // ✅ la view expose step_index (pas step_order)
   step_index: number | null;
-
   step_kind: string | null;
   chambre: string | null;
   lecture: string | null;
 
   label: string | null;
-  date_start: string | null; // YYYY-MM-DD
-  date_end: string | null;
+  date_start: string | null; // date
+  date_end: string | null; // date
 
   source_label: string | null;
   source_url: string | null;
+
+  raw: any | null;
 };
 
-const VIEW_LOI_PROCEDURE_APP = "loi_procedure_app";
+const PROCEDURE_SELECT = `
+  loi_id,
+  dossier_id,
+  step_index,
+  step_kind,
+  chambre,
+  lecture,
+  label,
+  date_start,
+  date_end,
+  source_label,
+  source_url,
+  raw
+`;
 
 /**
- * ✅ Récupère les étapes du dossier parlementaire (view)
- * Fallback strict: si vue absente / erreur -> []
+ * Fetch procédure (timeline) depuis loi_procedure_app
+ * Règle: dossier_id prioritaire (plus stable), fallback sur loi_id
  */
-export async function fetchLoiProcedure(
-  loiId: string,
-  limit = 200
-): Promise<LoiProcedureStep[]> {
-  const id = String(loiId ?? "").trim();
-  if (!id) return [];
+export async function fetchLoiProcedure(params: {
+  dossierId?: string | null;
+  loiId?: string | null;
+}): Promise<{ steps: LoiProcedureStep[]; error: string | null }> {
+  const dossierId = String(params.dossierId ?? "").trim() || null;
+  const loiId = String(params.loiId ?? "").trim() || null;
 
-  const { data, error } = await fromSafe(DB_VIEWS.LOI_PROCEDURE_APP )
-    .select(
-      "loi_id,dossier_id,step_index,step_kind,chambre,lecture,label,date_start,date_end,source_label,source_url"
-    )
-    .eq("loi_id", id)
-    .order("step_index", { ascending: true })
-    .order("date_start", { ascending: true })
-    .limit(limit);
+  try {
+    // 1) dossier_id d'abord
+    if (dossierId) {
+      const { data, error } = await fromSafe(DB_VIEWS.LOI_PROCEDURE_APP)
+        .select(PROCEDURE_SELECT)
+        .eq("dossier_id", dossierId)
+        .order("step_index", { ascending: true });
 
-  if (error) {
-    console.log("[fetchLoiProcedure] error =", error?.message ?? error);
-    return [];
+      if (error) return { steps: [], error: error.message };
+      if (Array.isArray(data) && data.length > 0) {
+        return { steps: data as any, error: null };
+      }
+    }
+
+    // 2) fallback loi_id
+    if (loiId) {
+      const { data, error } = await fromSafe(DB_VIEWS.LOI_PROCEDURE_APP)
+        .select(PROCEDURE_SELECT)
+        .eq("loi_id", loiId)
+        .order("step_index", { ascending: true });
+
+      if (error) return { steps: [], error: error.message };
+      return { steps: (data as any[]) ?? [], error: null };
+    }
+
+    return { steps: [], error: null };
+  } catch (e: any) {
+    return { steps: [], error: String(e?.message ?? e) };
   }
-
-  // ✅ évite le warning TS "GenericStringError[]" : on cast via unknown
-  return ((data ?? []) as unknown) as LoiProcedureStep[];
 }

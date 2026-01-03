@@ -1,5 +1,4 @@
 // lib/queries/actu.ts
-import { supabase } from "@/lib/supabaseClient";
 import { routeFromItemId } from "@/lib/routes";
 import { fromSafe, DB_VIEWS } from "@/lib/dbContract";
 
